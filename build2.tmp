@@ -1,0 +1,51 @@
+{
+  "id": "1fc339dc-608d-4fb4-9a7b-0cd57dc6450e",
+  "status": "ERRORED",
+  "platform": "ANDROID",
+  "error": {
+    "errorCode": "UNKNOWN_ERROR",
+    "message": "Unknown error. See logs of the Install dependencies build phase for more information."
+  },
+  "artifacts": {},
+  "fingerprint": {
+    "id": "019de874-9213-7e84-8806-6116fe6b3cb3",
+    "hash": "19d80c6aa1438be7a4ee0c56b5554699d04027c3"
+  },
+  "initiatingActor": {
+    "id": "298643cc-b1c9-46f1-952d-376efab3893a",
+    "displayName": "kutinho99"
+  },
+  "logFiles": [
+    "https://job-logs.eascdn.net/production/1fc339dc-608d-4fb4-9a7b-0cd57dc6450e/1777721838716-545060ba-997e-4228-8950-2dd266788f61.txt?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=www-production%40exponentjs.iam.gserviceaccount.com%2F20260502%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20260502T113836Z&X-Goog-Expires=900&X-Goog-SignedHeaders=host&X-Goog-Signature=197c0c09f43390d855bda50b682fbe8a736423bba75ee5794fbb01929d86ebf637064334f67f57fc5175d80aee3f2dd6eb70eac90011ef462acc362f54531783fbeab3c949f856e2a9d4dba6d58778baf6a507bebd47ff7f65fa2d0523b76c29530e750116d801abbf3c7370a012fb091504592114d15d00b4a6cc02d2a2049f693ea90c4d73e48dc8b494db4efa7193e55ef63bcc91cabec74d6cece112eabb95987be55b5b47e4280bc6fd159404716483c8778e28a005ae28a2fbd0a56e59214bdff3cc0ffdbae17d52df5b52a72a9376d6bb380f74b7e3a8fc9fed3df87a119dcf9a7c7ed45425e9c6419fd18fc7cf12402f095f5e66663c7d696c33879f",
+    "https://job-logs.eascdn.net/production/1fc339dc-608d-4fb4-9a7b-0cd57dc6450e/1777721840005-5c3a009f-ea6b-4baf-b26e-d96dfa57fec7.txt?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=www-production%40exponentjs.iam.gserviceaccount.com%2F20260502%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20260502T113836Z&X-Goog-Expires=900&X-Goog-SignedHeaders=host&X-Goog-Signature=5e4122622c176fb401205fd2ff84fd6714971d258695bd74c03c8bc4e63eb81f373d3f38e9a89049e5b61ac3845d467271eff968ce0dd196da4955389d412986a0cb3a1a2823fe434dca7809fd70ab89adee8162e468d42e66c3b1300817d65d0c0e0144c6db8b9b1978007ca6fdbb8a84129b77a1f2f6fe34940440e101d958b067b9131676fd3bf73feade0d5329a964e500aa4b88285acbeb1515a035bd28a809faec8d13f2742e702647f99c8b627ea0cb5f18905c003ad34aecdfc83ea89a139d18006d99d066574069f43e21e7210af4a19aa4321b96640f83b427a9cb258c5a872d27caecf213c21f7d46a3fe5fe0446135c80ce3c391208a383a32d6",
+    "https://job-logs.eascdn.net/production/1fc339dc-608d-4fb4-9a7b-0cd57dc6450e/1777721840267-0bb0ecb5-f884-4bcd-8a5f-d4c38220d16f.txt?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=www-production%40exponentjs.iam.gserviceaccount.com%2F20260502%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20260502T113836Z&X-Goog-Expires=900&X-Goog-SignedHeaders=host&X-Goog-Signature=6c597f53eac0bd41ff03e6ccacfba90fbbf4ae7b16f1d726af9dd260a47530e5efb594af3ac6988eb5f3dd37f3e96aae5d1aed31e2acaaf7c024f19f6ed1e82098c735465b9b3ff1d4258d1813944384e4660847e1747c61013a74ca8e1d0eb855481f384259375f8ff9b97df887658d29b7148a55e0aa158a1dd612e0ee1a95e18d9ab2ad564a7a854b6921bc5a5f58a338b9beae83e0d396654c79d439aba1334c732a390cce8ad207963003e1374a6ad5912857bec18c59cdba0373cc3a6acc2325d59a8d4f1301e9996b015ab378d60b1789440ffd1786ad0aceb5d79ba5cb4236c95a351dc6d5cc12a88acf9d3fb4190c08922989056a79462df7e94a28",
+    "https://job-logs.eascdn.net/production/1fc339dc-608d-4fb4-9a7b-0cd57dc6450e/1777721840454-96ac2dff-ac45-4d0c-bb1f-ebc14e591a29.txt?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=www-production%40exponentjs.iam.gserviceaccount.com%2F20260502%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20260502T113836Z&X-Goog-Expires=900&X-Goog-SignedHeaders=host&X-Goog-Signature=3a44bf04170a754d126f1c34824e1c55c92b02ad28e55da8e035314b6c2fe5d661e50da101a5914f8117d18c7476e66c768df00da9d25c2b209452217a2ed264e96b5ce6edb6e89ef866019d45944a62803345cfa24c15f300d6644a68f76705869ae4a88f7987cda551d7f41fce56ef7c3fd34f6d526e42d4ebacb423a82eae4d34a8844680901f1d01ce78c24bd8af58d102d6d96c9c98ce8806bb7e52fb28d264c93ba39273ec0a68dd6ce194c82e0afdfbf44057275f3665cb5699f6edc8b483aebbe8915e17b870710cd8de4de6f95ee7b81de8c7af1e1d84bfa46b1b787642a4ff318f3b7875623eb76252010b1f06b9739ff8b5889a1604ce28444d2e"
+  ],
+  "project": {
+    "id": "f0871438-5f4d-44f6-a08b-786fed59fc32",
+    "name": "aline-app",
+    "slug": "aline-app",
+    "ownerAccount": {
+      "id": "906d2bb8-75f8-49c0-b189-4053ac17fb72",
+      "name": "kutinho99"
+    }
+  },
+  "distribution": "INTERNAL",
+  "buildProfile": "preview",
+  "sdkVersion": "54.0.0",
+  "appVersion": "1.0.0",
+  "appBuildVersion": "1",
+  "gitCommitHash": "1d1eaa9979a16503c86a758b223382aa0082964a",
+  "gitCommitMessage": "Phase 1 complete + Phase 2 Block 1: background GPS foundation\n\n- Ship Phase 1: auth, onboarding, agent, friend graph, groups,\n  hangout coordination, calendar sync, My Week, Profile\n- Add Phase 2 Block 1 schema: behavioral_pings, places, routines,\n  behavioral_summary (migration applied to Supabase)\n- Add expo-task-manager for background location task\n- Add eas.json with preview (APK) and development build profiles\n- src/lib/backgroundGps.ts: Expo TaskManager background location task,\n  geohash-8 encoding on-device, smart sampling (15min/50m), upload to Supabase\n- app.json: background location + Android foreground service enabled\n- Wire task definition import in root _layout, start/stop in (app)/_layout\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>",
+  "priority": "NORMAL_PLUS",
+  "createdAt": "2026-05-02T11:37:18.504Z",
+  "updatedAt": "2026-05-02T11:38:19.307Z",
+  "completedAt": "2026-05-02T11:38:18.115Z",
+  "expirationDate": "2026-05-16T11:37:18.533Z",
+  "isForIosSimulator": false,
+  "metrics": {
+    "buildWaitTime": 107,
+    "buildQueueTime": 49228,
+    "buildDuration": 9939
+  }
+}
