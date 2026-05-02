@@ -18,6 +18,7 @@
 
 import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
+import { Platform } from 'react-native';
 import { supabase } from './supabase';
 
 export const BACKGROUND_LOCATION_TASK = 'aline-background-location';
@@ -51,24 +52,6 @@ export function encodeGeohash(lat: number, lon: number, precision: number): stri
   return hash;
 }
 
-// ---------- motion state mapping --------------------------------------------
-
-type MotionState = 'stationary' | 'walking' | 'running' | 'cycling' | 'driving' | 'unknown';
-
-function activityToMotion(activity: Location.LocationActivityType | undefined): MotionState {
-  switch (activity) {
-    case Location.LocationActivityType.Fitness:
-    case Location.LocationActivityType.Other:
-      return 'walking';
-    case Location.LocationActivityType.AutomotiveNavigation:
-      return 'driving';
-    case Location.LocationActivityType.OtherNavigation:
-      return 'cycling';
-    default:
-      return 'unknown';
-  }
-}
-
 // ---------- task definition (must run at import time) -----------------------
 
 TaskManager.defineTask(BACKGROUND_LOCATION_TASK, async ({ data, error }) => {
@@ -80,72 +63,100 @@ TaskManager.defineTask(BACKGROUND_LOCATION_TASK, async ({ data, error }) => {
   const { locations } = data as { locations: Location.LocationObject[] };
   if (!locations?.length) return;
 
-  const { data: { session } } = await supabase.auth.getSession();
-  if (!session) return;
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) return;
 
-  const pings = locations.map((loc) => ({
-    user_id: session.user.id,
-    captured_at: new Date(loc.timestamp).toISOString(),
-    geohash_8: encodeGeohash(loc.coords.latitude, loc.coords.longitude, 8),
-    motion_state: activityToMotion(undefined) as MotionState,
-    battery_level: null as number | null,
-  }));
+    const pings = locations.map((loc) => ({
+      user_id: session.user.id,
+      captured_at: new Date(loc.timestamp).toISOString(),
+      geohash_8: encodeGeohash(loc.coords.latitude, loc.coords.longitude, 8),
+      motion_state: 'unknown',
+      battery_level: null as number | null,
+    }));
 
-  const { error: insertErr } = await supabase
-    .from('behavioral_pings')
-    .insert(pings);
+    const { error: insertErr } = await supabase
+      .from('behavioral_pings')
+      .insert(pings);
 
-  if (insertErr) {
-    console.warn('[ALINE GPS] Upload failed:', insertErr.message);
+    if (insertErr) {
+      console.warn('[ALINE GPS] Upload failed:', insertErr.message);
+    }
+  } catch (e) {
+    console.warn('[ALINE GPS] Task exception:', e);
   }
 });
 
 // ---------- permission helpers ----------------------------------------------
 
 export async function requestLocationPermissions(): Promise<boolean> {
-  const { status: fg } = await Location.requestForegroundPermissionsAsync();
-  if (fg !== 'granted') return false;
+  try {
+    const { status: fg } = await Location.requestForegroundPermissionsAsync();
+    if (fg !== 'granted') return false;
 
-  const { status: bg } = await Location.requestBackgroundPermissionsAsync();
-  return bg === 'granted';
+    const { status: bg } = await Location.requestBackgroundPermissionsAsync();
+    return bg === 'granted';
+  } catch (e) {
+    console.warn('[ALINE GPS] Permission request failed:', e);
+    return false;
+  }
 }
 
 // ---------- start / stop ----------------------------------------------------
 
-const TASK_OPTIONS: Location.LocationTaskOptions = {
-  accuracy: Location.Accuracy.Balanced,
-  timeInterval: 15 * 60 * 1000,     // at most once per 15 min
-  distanceInterval: 50,              // skip if moved < 50 m
-  pausesUpdatesAutomatically: true,  // iOS: OS pauses when stationary
-  activityType: Location.ActivityType.Other,
-  showsBackgroundLocationIndicator: true,
-  foregroundService: {
-    notificationTitle: 'ALINE',
-    notificationBody: 'Learning your routines in the background',
-    notificationColor: '#7C6AF7',
-  },
-  deferredUpdatesInterval: 15 * 60 * 1000,
-  deferredUpdatesDistance: 50,
-};
+// Build platform-safe options — ActivityType and showsBackgroundLocationIndicator
+// are iOS-only; accessing them on Android returns undefined and crashes at
+// module load time if evaluated eagerly.
+function buildTaskOptions(): Location.LocationTaskOptions {
+  const base: Location.LocationTaskOptions = {
+    accuracy: Location.Accuracy.Balanced,
+    timeInterval: 15 * 60 * 1000,    // at most once per 15 min
+    distanceInterval: 50,             // skip if moved < 50 m
+    foregroundService: {              // Android: required for background access
+      notificationTitle: 'ALINE',
+      notificationBody: 'Learning your routines in the background',
+      notificationColor: '#7C6AF7',
+    },
+    deferredUpdatesInterval: 15 * 60 * 1000,
+    deferredUpdatesDistance: 50,
+  };
 
-export async function startBackgroundGps(): Promise<void> {
-  const hasPerms = await requestLocationPermissions();
-  if (!hasPerms) {
-    console.log('[ALINE GPS] Background location permission not granted — skipping');
-    return;
+  if (Platform.OS === 'ios') {
+    base.pausesUpdatesAutomatically = true;   // let iOS pause when stationary
+    base.showsBackgroundLocationIndicator = true;
+    base.activityType = Location.ActivityType.Other;
   }
 
-  const alreadyRunning = await Location.hasStartedLocationUpdatesAsync(BACKGROUND_LOCATION_TASK);
-  if (alreadyRunning) return;
+  return base;
+}
 
-  await Location.startLocationUpdatesAsync(BACKGROUND_LOCATION_TASK, TASK_OPTIONS);
-  console.log('[ALINE GPS] Background task started');
+export async function startBackgroundGps(): Promise<void> {
+  try {
+    const hasPerms = await requestLocationPermissions();
+    if (!hasPerms) {
+      console.log('[ALINE GPS] Background location permission not granted — skipping');
+      return;
+    }
+
+    const alreadyRunning = await Location.hasStartedLocationUpdatesAsync(BACKGROUND_LOCATION_TASK);
+    if (alreadyRunning) return;
+
+    await Location.startLocationUpdatesAsync(BACKGROUND_LOCATION_TASK, buildTaskOptions());
+    console.log('[ALINE GPS] Background task started');
+  } catch (e) {
+    // Never crash the app over GPS setup failure
+    console.warn('[ALINE GPS] startBackgroundGps failed:', e);
+  }
 }
 
 export async function stopBackgroundGps(): Promise<void> {
-  const running = await Location.hasStartedLocationUpdatesAsync(BACKGROUND_LOCATION_TASK);
-  if (running) {
-    await Location.stopLocationUpdatesAsync(BACKGROUND_LOCATION_TASK);
-    console.log('[ALINE GPS] Background task stopped');
+  try {
+    const running = await Location.hasStartedLocationUpdatesAsync(BACKGROUND_LOCATION_TASK);
+    if (running) {
+      await Location.stopLocationUpdatesAsync(BACKGROUND_LOCATION_TASK);
+      console.log('[ALINE GPS] Background task stopped');
+    }
+  } catch (e) {
+    console.warn('[ALINE GPS] stopBackgroundGps failed:', e);
   }
 }
