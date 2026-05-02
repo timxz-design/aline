@@ -80,17 +80,22 @@ export async function requestLocationPermissions(): Promise<boolean> {
 // are iOS-only; accessing them on Android returns undefined and crashes at
 // module load time if evaluated eagerly.
 function buildTaskOptions(): Location.LocationTaskOptions {
+  // Testing-friendly cadence: 2 min / 30 m. Production should dial back to
+  // 15 min / 50 m for battery (TODO before public launch).
+  const TIME_MS = 2 * 60 * 1000;
+  const DIST_M  = 30;
+
   const base: Location.LocationTaskOptions = {
     accuracy: Location.Accuracy.Balanced,
-    timeInterval: 15 * 60 * 1000,    // at most once per 15 min
-    distanceInterval: 50,             // skip if moved < 50 m
+    timeInterval: TIME_MS,
+    distanceInterval: DIST_M,
     foregroundService: {              // Android: required for background access
       notificationTitle: 'ALINE',
       notificationBody: 'Learning your routines in the background',
       notificationColor: '#7C6AF7',
     },
-    deferredUpdatesInterval: 15 * 60 * 1000,
-    deferredUpdatesDistance: 50,
+    deferredUpdatesInterval: TIME_MS,
+    deferredUpdatesDistance: DIST_M,
   };
 
   if (Platform.OS === 'ios') {
