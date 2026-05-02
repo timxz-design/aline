@@ -15,7 +15,7 @@ import { Input } from '../../src/components/Input';
 import { Screen } from '../../src/components/Screen';
 import { useAuth } from '../../src/lib/auth-context';
 import { OPENNESS_OPTIONS, type SocialOpenness } from '../../src/lib/onboarding-data';
-import { recomputePlacesForCurrentUser } from '../../src/lib/places';
+import { recomputePlacesForCurrentUser, resolvePlaceIdentities } from '../../src/lib/places';
 import { supabase } from '../../src/lib/supabase';
 import { useFriends, type FriendProfile, type PendingRequest } from '../../src/lib/use-friends';
 import { useProfile } from '../../src/lib/use-profile';
@@ -312,33 +312,52 @@ export default function ProfileScreen() {
  * lets you verify pings → places upsert end-to-end before automating it.
  */
 function PlacesDebugButton() {
-  const [running, setRunning] = useState(false);
+  const [running, setRunning] = useState<'cluster' | 'resolve' | null>(null);
   const [last, setLast] = useState<string | null>(null);
 
-  const run = useCallback(async () => {
-    setRunning(true);
+  const cluster = useCallback(async () => {
+    setRunning('cluster');
     try {
       const r = await recomputePlacesForCurrentUser();
-      if (r.error) {
-        setLast(`Error: ${r.error}`);
-      } else {
-        setLast(
-          `Read ${r.pingsRead} pings → ${r.clustersFound} clusters → ${r.placesUpserted} places upserted`
-        );
-      }
+      setLast(
+        r.error
+          ? `Cluster error: ${r.error}`
+          : `Read ${r.pingsRead} pings → ${r.clustersFound} clusters → ${r.placesUpserted} places upserted`
+      );
     } catch (e) {
       setLast(`Exception: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
-      setRunning(false);
+      setRunning(null);
+    }
+  }, []);
+
+  const resolve = useCallback(async () => {
+    setRunning('resolve');
+    try {
+      const r = await resolvePlaceIdentities();
+      setLast(
+        r.error
+          ? `Resolve error: ${r.error}`
+          : `Resolved ${r.resolved} / ${r.total} places via Google Places`
+      );
+    } catch (e) {
+      setLast(`Exception: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setRunning(null);
     }
   }, []);
 
   return (
     <View style={{ gap: space.sm }}>
       <Button
-        label={running ? 'Clustering…' : 'Recompute places from pings'}
-        onPress={run}
-        disabled={running}
+        label={running === 'cluster' ? 'Clustering…' : '1. Recompute places from pings'}
+        onPress={cluster}
+        disabled={running !== null}
+      />
+      <Button
+        label={running === 'resolve' ? 'Resolving…' : '2. Label places via Google Places'}
+        onPress={resolve}
+        disabled={running !== null}
       />
       {last ? (
         <Text style={{ color: colors.textDim, fontSize: 12 }}>{last}</Text>

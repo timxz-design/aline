@@ -25,6 +25,8 @@ import {
 } from './clustering';
 import { supabase } from './supabase';
 
+const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL;
+
 const PING_WINDOW_DAYS = 30;
 const EPSILON_METERS = 100;
 const MIN_PINGS = 5;
@@ -148,4 +150,37 @@ export async function recomputePlacesForCurrentUser(): Promise<{
     clustersFound: clusters.length,
     placesUpserted: upserted,
   };
+}
+
+/**
+ * Call the `resolve-places` Edge Function to label any unresolved places
+ * with Google Places identity (name, type, category, sensitive flag).
+ */
+export async function resolvePlaceIdentities(): Promise<{
+  resolved: number;
+  total: number;
+  error?: string;
+}> {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) return { resolved: 0, total: 0, error: 'not signed in' };
+
+  try {
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/resolve-places`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${session.access_token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({}),
+    });
+    const body = await res.json();
+    if (!res.ok) return { resolved: 0, total: 0, error: body?.error ?? `HTTP ${res.status}` };
+    return { resolved: body.resolved ?? 0, total: body.total ?? 0 };
+  } catch (e) {
+    return {
+      resolved: 0,
+      total: 0,
+      error: e instanceof Error ? e.message : String(e),
+    };
+  }
 }
