@@ -6,8 +6,8 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AuthProvider } from '../src/lib/auth-context';
 import { colors } from '../src/theme';
-// GPS import temporarily disabled for crash diagnostics
-// import '../src/lib/backgroundGps';
+// Must be imported at root so TaskManager.defineTask runs before any background wake-up
+import '../src/lib/backgroundGps';
 
 // ---------- debug error boundary (remove before public launch) --------------
 class DebugErrorBoundary extends React.Component<

@@ -1,9 +1,8 @@
 import { Redirect, Tabs } from 'expo-router';
+import { useEffect } from 'react';
 import { Text, View } from 'react-native';
 import { useAuth } from '../../src/lib/auth-context';
-// GPS temporarily disabled for crash diagnostics
-// import { useEffect } from 'react';
-// import { startBackgroundGps, stopBackgroundGps } from '../../src/lib/backgroundGps';
+import { startBackgroundGps, stopBackgroundGps } from '../../src/lib/backgroundGps';
 import { useProfile } from '../../src/lib/use-profile';
 import { colors, space } from '../../src/theme';
 
@@ -37,12 +36,11 @@ export default function AppLayout() {
   const { session, loading: authLoading } = useAuth();
   const { profile, loading: profileLoading } = useProfile();
 
-  // GPS temporarily disabled for crash diagnostics
-  // useEffect(() => {
-  //   if (!session) return;
-  //   startBackgroundGps();
-  //   return () => { stopBackgroundGps(); };
-  // }, [session?.user.id]);
+  useEffect(() => {
+    if (!session) return;
+    startBackgroundGps();
+    return () => { stopBackgroundGps(); };
+  }, [session?.user.id]);
 
   if (authLoading || profileLoading) return null;
   if (!session) return <Redirect href="/(auth)/sign-in" />;
