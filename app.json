@@ -1,30 +1,83 @@
 {
   "expo": {
-    "name": "aline-app",
+    "name": "ALINE",
     "slug": "aline-app",
+    "scheme": "aline",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "dark",
     "newArchEnabled": true,
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
+      "backgroundColor": "#0A0E1A"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "app.aline.mvp",
+      "infoPlist": {
+        "NSCalendarsUsageDescription": "ALINE reads your calendar to coordinate hangouts with your friend groups.",
+        "NSContactsUsageDescription": "ALINE uses contacts to help you invite friends to your groups.",
+        "NSLocationWhenInUseUsageDescription": "ALINE uses your location to suggest meetup spots that work for everyone.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "ALINE learns your routines (gym, university, home) so it can suggest the best times for your group to hang out."
+      }
     },
     "android": {
+      "package": "app.aline.mvp",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#ffffff"
+        "backgroundColor": "#0A0E1A"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION",
+        "ACTIVITY_RECOGNITION",
+        "READ_CALENDAR",
+        "WRITE_CALENDAR",
+        "android.permission.READ_CALENDAR",
+        "android.permission.WRITE_CALENDAR",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_BACKGROUND_LOCATION",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_LOCATION"
+      ]
     },
     "web": {
+      "bundler": "metro",
       "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-task-manager",
+      [
+        "expo-calendar",
+        {
+          "calendarPermission": "ALINE coordinates hangouts using your calendar."
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "ALINE learns your routines so it can suggest the best times for group hangouts.",
+          "isAndroidBackgroundLocationEnabled": true,
+          "isAndroidForegroundServiceEnabled": true
+        }
+      ],
+      "expo-web-browser"
+    ],
+    "experiments": {
+      "typedRoutes": false
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "f0871438-5f4d-44f6-a08b-786fed59fc32"
+      }
     }
   }
 }
