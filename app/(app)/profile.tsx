@@ -15,6 +15,7 @@ import { Input } from '../../src/components/Input';
 import { Screen } from '../../src/components/Screen';
 import { useAuth } from '../../src/lib/auth-context';
 import { OPENNESS_OPTIONS, type SocialOpenness } from '../../src/lib/onboarding-data';
+import { recomputePlacesForCurrentUser } from '../../src/lib/places';
 import { supabase } from '../../src/lib/supabase';
 import { useFriends, type FriendProfile, type PendingRequest } from '../../src/lib/use-friends';
 import { useProfile } from '../../src/lib/use-profile';
@@ -200,6 +201,11 @@ export default function ProfileScreen() {
           <GoogleCalendarConnect />
         </Section>
 
+        {/* Behavioral profile (debug) */}
+        <Section title="Behavioral profile (debug)">
+          <PlacesDebugButton />
+        </Section>
+
         {/* Social openness */}
         <Section title="Social openness">
           <View style={{ gap: space.sm }}>
@@ -298,6 +304,46 @@ export default function ProfileScreen() {
         onSuccess={refreshFriends}
       />
     </Screen>
+  );
+}
+
+/**
+ * Manual trigger for the place-clustering pipeline. Block-1 debug surface —
+ * lets you verify pings → places upsert end-to-end before automating it.
+ */
+function PlacesDebugButton() {
+  const [running, setRunning] = useState(false);
+  const [last, setLast] = useState<string | null>(null);
+
+  const run = useCallback(async () => {
+    setRunning(true);
+    try {
+      const r = await recomputePlacesForCurrentUser();
+      if (r.error) {
+        setLast(`Error: ${r.error}`);
+      } else {
+        setLast(
+          `Read ${r.pingsRead} pings → ${r.clustersFound} clusters → ${r.placesUpserted} places upserted`
+        );
+      }
+    } catch (e) {
+      setLast(`Exception: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setRunning(false);
+    }
+  }, []);
+
+  return (
+    <View style={{ gap: space.sm }}>
+      <Button
+        label={running ? 'Clustering…' : 'Recompute places from pings'}
+        onPress={run}
+        disabled={running}
+      />
+      {last ? (
+        <Text style={{ color: colors.textDim, fontSize: 12 }}>{last}</Text>
+      ) : null}
+    </View>
   );
 }
 

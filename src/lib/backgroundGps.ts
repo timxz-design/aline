@@ -19,38 +19,10 @@
 import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
 import { Platform } from 'react-native';
+import { encodeGeohash } from './clustering';
 import { supabase } from './supabase';
 
 export const BACKGROUND_LOCATION_TASK = 'aline-background-location';
-
-// ---------- geohash encoding (standard base32 algo, no external dep) --------
-
-const GH_BASE32 = '0123456789bcdefghjkmnpqrstuvwxyz';
-
-export function encodeGeohash(lat: number, lon: number, precision: number): string {
-  let idx = 0, bit = 0;
-  let evenBit = true;
-  let latMin = -90, latMax = 90, lonMin = -180, lonMax = 180;
-  let hash = '';
-
-  while (hash.length < precision) {
-    if (evenBit) {
-      const mid = (lonMin + lonMax) / 2;
-      if (lon >= mid) { idx = idx * 2 + 1; lonMin = mid; }
-      else            { idx = idx * 2;     lonMax = mid; }
-    } else {
-      const mid = (latMin + latMax) / 2;
-      if (lat >= mid) { idx = idx * 2 + 1; latMin = mid; }
-      else            { idx = idx * 2;     latMax = mid; }
-    }
-    evenBit = !evenBit;
-    if (++bit === 5) {
-      hash += GH_BASE32[idx];
-      bit = 0; idx = 0;
-    }
-  }
-  return hash;
-}
 
 // ---------- task definition (must run at import time) -----------------------
 
