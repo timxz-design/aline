@@ -16,6 +16,7 @@ import { Screen } from '../../src/components/Screen';
 import { useAuth } from '../../src/lib/auth-context';
 import { OPENNESS_OPTIONS, type SocialOpenness } from '../../src/lib/onboarding-data';
 import { recomputePlacesForCurrentUser, resolvePlaceIdentities } from '../../src/lib/places';
+import { recomputeRoutinesForCurrentUser } from '../../src/lib/routines';
 import { supabase } from '../../src/lib/supabase';
 import { useFriends, type FriendProfile, type PendingRequest } from '../../src/lib/use-friends';
 import { useProfile } from '../../src/lib/use-profile';
@@ -312,7 +313,7 @@ export default function ProfileScreen() {
  * lets you verify pings → places upsert end-to-end before automating it.
  */
 function PlacesDebugButton() {
-  const [running, setRunning] = useState<'cluster' | 'resolve' | null>(null);
+  const [running, setRunning] = useState<'cluster' | 'resolve' | 'routines' | null>(null);
   const [last, setLast] = useState<string | null>(null);
 
   const cluster = useCallback(async () => {
@@ -347,6 +348,22 @@ function PlacesDebugButton() {
     }
   }, []);
 
+  const routines = useCallback(async () => {
+    setRunning('routines');
+    try {
+      const r = await recomputeRoutinesForCurrentUser();
+      setLast(
+        r.error
+          ? `Routines error: ${r.error}`
+          : `Mined ${r.pingsRead} pings × ${r.placesRead} places → ${r.routinesFound} routines detected`
+      );
+    } catch (e) {
+      setLast(`Exception: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setRunning(null);
+    }
+  }, []);
+
   return (
     <View style={{ gap: space.sm }}>
       <Button
@@ -357,6 +374,11 @@ function PlacesDebugButton() {
       <Button
         label={running === 'resolve' ? 'Resolving…' : '2. Label places via Google Places'}
         onPress={resolve}
+        disabled={running !== null}
+      />
+      <Button
+        label={running === 'routines' ? 'Mining…' : '3. Detect routines from pings'}
+        onPress={routines}
         disabled={running !== null}
       />
       {last ? (
