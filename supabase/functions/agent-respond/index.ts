@@ -63,6 +63,11 @@ type GroupRow = {
   group_type: string | null;
 };
 
+type BehavioralSummaryRow = {
+  archetype_text: string | null;
+  data_quality: string | null;
+};
+
 type Extracted = {
   key: string;
   value: unknown;
@@ -167,8 +172,9 @@ function buildSystemPrompt(input: {
   goals: GoalRow[];
   interests: InterestRow[];
   groups: GroupRow[];
+  behavioralSummary: BehavioralSummaryRow | null;
 }): string {
-  const { firstName, socialOpenness, timezone, goals, interests, groups } = input;
+  const { firstName, socialOpenness, timezone, goals, interests, groups, behavioralSummary } = input;
 
   const goalLines =
     goals.length === 0
@@ -257,6 +263,9 @@ You learn from every conversation. You represent ${firstName} when their agent t
 # What you currently know about ${firstName}
 
 Social openness: ${socialOpenness ?? 'not set yet'}
+
+Behavioral profile (learned from observed routines, data quality: ${behavioralSummary?.data_quality ?? 'none'}):
+${behavioralSummary?.archetype_text ?? 'Not yet enough data — keep tracking, the picture will fill in.'}
 
 Active goals:
 ${goalLines}
@@ -363,6 +372,7 @@ Deno.serve(async (req: Request) => {
     groupsRes,
     chatRes,
     triggerMsgRes,
+    summaryRes,
   ] = await Promise.all([
     supabase
       .from('profiles')
@@ -399,6 +409,11 @@ Deno.serve(async (req: Request) => {
       .eq('id', body.user_message_id)
       .eq('user_id', userId)
       .maybeSingle(),
+    supabase
+      .from('behavioral_summary')
+      .select('archetype_text, data_quality')
+      .eq('user_id', userId)
+      .maybeSingle(),
   ]);
 
   const profile: ProfileRow = (profileRes.data as ProfileRow | null) ?? {
@@ -416,6 +431,7 @@ Deno.serve(async (req: Request) => {
       .filter(Boolean);
   const recentChat: ChatRow[] = ((chatRes.data as ChatRow[] | null) ?? []).reverse();
   const triggerMsg = triggerMsgRes.data as ChatRow | null;
+  const behavioralSummary = (summaryRes.data as BehavioralSummaryRow | null) ?? null;
 
   if (!triggerMsg || triggerMsg.role !== 'user') {
     return jsonRes({ error: 'Trigger message not found or not a user message' }, 404);
@@ -428,6 +444,7 @@ Deno.serve(async (req: Request) => {
     goals,
     interests,
     groups,
+    behavioralSummary,
   });
 
   const messages: ClaudeMessage[] = toClaudeMessages(recentChat);

@@ -17,6 +17,7 @@ import { useAuth } from '../../src/lib/auth-context';
 import { OPENNESS_OPTIONS, type SocialOpenness } from '../../src/lib/onboarding-data';
 import { recomputePlacesForCurrentUser, resolvePlaceIdentities } from '../../src/lib/places';
 import { recomputeRoutinesForCurrentUser } from '../../src/lib/routines';
+import { recomputeBehavioralSummaryForCurrentUser } from '../../src/lib/summary';
 import { supabase } from '../../src/lib/supabase';
 import { useFriends, type FriendProfile, type PendingRequest } from '../../src/lib/use-friends';
 import { useProfile } from '../../src/lib/use-profile';
@@ -313,7 +314,7 @@ export default function ProfileScreen() {
  * lets you verify pings → places upsert end-to-end before automating it.
  */
 function PlacesDebugButton() {
-  const [running, setRunning] = useState<'cluster' | 'resolve' | 'routines' | null>(null);
+  const [running, setRunning] = useState<'cluster' | 'resolve' | 'routines' | 'summary' | null>(null);
   const [last, setLast] = useState<string | null>(null);
 
   const cluster = useCallback(async () => {
@@ -364,6 +365,25 @@ function PlacesDebugButton() {
     }
   }, []);
 
+  const summary = useCallback(async () => {
+    setRunning('summary');
+    try {
+      const r = await recomputeBehavioralSummaryForCurrentUser();
+      if (r.error) setLast(`Summary error: ${r.error}`);
+      else if (r.summary) {
+        setLast(
+          `[${r.summary.data_quality}] ${r.summary.archetype_text}`,
+        );
+      } else {
+        setLast('No summary produced');
+      }
+    } catch (e) {
+      setLast(`Exception: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setRunning(null);
+    }
+  }, []);
+
   return (
     <View style={{ gap: space.sm }}>
       <Button
@@ -379,6 +399,11 @@ function PlacesDebugButton() {
       <Button
         label={running === 'routines' ? 'Mining…' : '3. Detect routines from pings'}
         onPress={routines}
+        disabled={running !== null}
+      />
+      <Button
+        label={running === 'summary' ? 'Generating…' : '4. Generate behavioral summary'}
+        onPress={summary}
         disabled={running !== null}
       />
       {last ? (
