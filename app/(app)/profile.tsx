@@ -9,6 +9,7 @@ import {
   View,
 } from 'react-native';
 import { AddFriendModal } from '../../src/components/AddFriendModal';
+import { BehavioralProfile } from '../../src/components/BehavioralProfile';
 import { Button } from '../../src/components/Button';
 import { GoogleCalendarConnect } from '../../src/components/GoogleCalendarConnect';
 import { Input } from '../../src/components/Input';
@@ -203,8 +204,13 @@ export default function ProfileScreen() {
           <GoogleCalendarConnect />
         </Section>
 
-        {/* Behavioral profile (debug) */}
-        <Section title="Behavioral profile (debug)">
+        {/* Behavioral profile — what ALINE knows about you */}
+        <Section title="What ALINE knows about you">
+          <BehavioralProfile />
+        </Section>
+
+        {/* Behavioral profile pipeline (debug) */}
+        <Section title="Behavioral pipeline (debug)">
           <PlacesDebugButton />
         </Section>
 
