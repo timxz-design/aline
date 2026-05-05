@@ -165,7 +165,17 @@ const TOOLS = [
 ] as const;
 
 // ---------- prompt --------------------------------------------------------
-function buildSystemPrompt(input: {
+/**
+ * Returns two strings: a STATIC block (per-user, stable within a session)
+ * suitable for prompt caching, and a DYNAMIC block (current timestamp only,
+ * changes every request, must NOT be cached).
+ *
+ * This split powers Anthropic prompt caching: the static block is sent with
+ * cache_control: { type: 'ephemeral' }, the dynamic block is appended after.
+ * On a cache hit, the static block is read at 10% of normal cost — typically
+ * 40-60% input-token savings on a chatty session.
+ */
+function buildSystemPromptBlocks(input: {
   firstName: string;
   socialOpenness: string | null;
   timezone: string;
@@ -173,7 +183,7 @@ function buildSystemPrompt(input: {
   interests: InterestRow[];
   groups: GroupRow[];
   behavioralSummary: BehavioralSummaryRow | null;
-}): string {
+}): { staticBlock: string; dynamicBlock: string } {
   const { firstName, socialOpenness, timezone, goals, interests, groups, behavioralSummary } = input;
 
   const goalLines =
@@ -205,9 +215,7 @@ function buildSystemPrompt(input: {
           )
           .join('\n');
 
-  const now = new Date();
-
-  return `You are ALINE — ${firstName}'s personal AI agent.
+  const staticBlock = `You are ALINE — ${firstName}'s personal AI agent.
 
 You help them coordinate their life and connect with the people who matter to them.
 You learn from every conversation. You represent ${firstName} when their agent talks to other people's agents.
@@ -252,7 +260,6 @@ You learn from every conversation. You represent ${firstName} when their agent t
 
 # Time + location context
 
-- Now (UTC): ${now.toISOString()}
 - ${firstName}'s timezone: ${timezone}
 - IMPORTANT: When you call propose_hangout, the proposed_start and
   proposed_end you provide are interpreted as ${firstName}'s LOCAL TIME
@@ -294,6 +301,11 @@ JSON array of NEW preferences/facts learned from THIS user message. Use [] if no
 }
 Do NOT re-extract things already in "Known preferences".
 </extracted>`;
+
+  const now = new Date();
+  const dynamicBlock = `Now (UTC): ${now.toISOString()}`;
+
+  return { staticBlock, dynamicBlock };
 }
 
 // ---------- response parsing ----------------------------------------------
@@ -437,7 +449,7 @@ Deno.serve(async (req: Request) => {
     return jsonRes({ error: 'Trigger message not found or not a user message' }, 404);
   }
 
-  const systemPrompt = buildSystemPrompt({
+  const { staticBlock, dynamicBlock } = buildSystemPromptBlocks({
     firstName: profile.first_name ?? 'friend',
     socialOpenness: profile.social_openness,
     timezone: profile.timezone ?? 'Europe/Ljubljana',
@@ -447,11 +459,29 @@ Deno.serve(async (req: Request) => {
     behavioralSummary,
   });
 
+  // Anthropic prompt caching: cache_control on the static block. The dynamic
+  // block (current timestamp) follows uncached. On subsequent requests within
+  // ~5 minutes with the same static block, the cached portion costs 10% of
+  // normal — meaningful savings on chatty sessions.
+  const systemArray = [
+    {
+      type: 'text' as const,
+      text: staticBlock,
+      cache_control: { type: 'ephemeral' as const },
+    },
+    {
+      type: 'text' as const,
+      text: dynamicBlock,
+    },
+  ];
+
   const messages: ClaudeMessage[] = toClaudeMessages(recentChat);
 
   // -------- agentic loop --------
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
+  let totalCacheCreationTokens = 0;
+  let totalCacheReadTokens = 0;
   const totalStart = Date.now();
   const toolsExecuted: Array<{ name: string; input: Record<string, unknown>; result: string; ok: boolean }> = [];
   let finalText = '';
@@ -467,7 +497,7 @@ Deno.serve(async (req: Request) => {
       body: JSON.stringify({
         model: MODEL,
         max_tokens: 1024,
-        system: systemPrompt,
+        system: systemArray,
         tools: TOOLS,
         messages,
       }),
@@ -485,11 +515,18 @@ Deno.serve(async (req: Request) => {
     const claudeData = (await claudeRes.json()) as {
       content?: ContentBlock[];
       stop_reason?: string;
-      usage?: { input_tokens?: number; output_tokens?: number };
+      usage?: {
+        input_tokens?: number;
+        output_tokens?: number;
+        cache_creation_input_tokens?: number;
+        cache_read_input_tokens?: number;
+      };
     };
 
     totalInputTokens += claudeData.usage?.input_tokens ?? 0;
     totalOutputTokens += claudeData.usage?.output_tokens ?? 0;
+    totalCacheCreationTokens += claudeData.usage?.cache_creation_input_tokens ?? 0;
+    totalCacheReadTokens += claudeData.usage?.cache_read_input_tokens ?? 0;
 
     const blocks = claudeData.content ?? [];
     const textBlocks = blocks.filter((b): b is { type: 'text'; text: string } => b.type === 'text');
@@ -544,6 +581,8 @@ Deno.serve(async (req: Request) => {
         history_count: recentChat.length,
         latency_ms: totalLatency,
         tools_executed: toolsExecuted,
+        cache_creation_tokens: totalCacheCreationTokens,
+        cache_read_tokens: totalCacheReadTokens,
       },
       extracted_data: extracted.length > 0 ? extracted : null,
     })
