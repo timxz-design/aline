@@ -55,6 +55,12 @@
       "expo-router",
       "expo-task-manager",
       [
+        "expo-notifications",
+        {
+          "color": "#5EEAD4"
+        }
+      ],
+      [
         "expo-calendar",
         {
           "calendarPermission": "ALINE coordinates hangouts using your calendar."

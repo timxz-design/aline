@@ -7,6 +7,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
+import { deregisterPushToken } from './push-notifications';
 import { supabase } from './supabase';
 
 type AuthState = {
@@ -74,6 +75,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return { error: error as Error | null };
       },
       signOut: async () => {
+        // Clear the push token first so this device stops receiving pushes
+        // for the now-signed-out account.
+        await deregisterPushToken();
         await supabase.auth.signOut();
       },
     }),

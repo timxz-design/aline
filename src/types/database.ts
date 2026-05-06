@@ -244,6 +244,9 @@ export type Database = {
           social_openness: string | null;
           timezone: string | null;
           updated_at: string | null;
+          expo_push_token: string | null;
+          push_notifications_enabled: boolean;
+          push_token_updated_at: string | null;
         };
         Insert: {
           archetype_summary?: string | null;
@@ -256,6 +259,9 @@ export type Database = {
           social_openness?: string | null;
           timezone?: string | null;
           updated_at?: string | null;
+          expo_push_token?: string | null;
+          push_notifications_enabled?: boolean;
+          push_token_updated_at?: string | null;
         };
         Update: Partial<Database['public']['Tables']['profiles']['Insert']>;
         Relationships: [];
@@ -466,6 +472,10 @@ export type Database = {
       };
       disconnect_google_calendar: {
         Args: Record<string, never>;
+        Returns: undefined;
+      };
+      set_push_token: {
+        Args: { _token: string | null };
         Returns: undefined;
       };
     };
