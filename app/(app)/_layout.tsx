@@ -1,8 +1,9 @@
 import * as Notifications from 'expo-notifications';
 import { Redirect, Tabs, useRouter } from 'expo-router';
 import { useEffect } from 'react';
-import { Text, View } from 'react-native';
+import { AppState, Text, View, type AppStateStatus } from 'react-native';
 import { useAuth } from '../../src/lib/auth-context';
+import { maybeRecompute } from '../../src/lib/auto-recompute';
 import { startBackgroundGps, stopBackgroundGps } from '../../src/lib/backgroundGps';
 import {
   registerForPushNotifications,
@@ -46,6 +47,24 @@ export default function AppLayout() {
     if (!session) return;
     startBackgroundGps();
     return () => { stopBackgroundGps(); };
+  }, [session?.user.id]);
+
+  // Auto-recompute the behavioral pipeline (cluster → resolve → routines →
+  // summary). Throttled to ≤1 run per hour per device. Runs in the background;
+  // never blocks the UI. Triggered on:
+  //   - first mount with a session (cold app open)
+  //   - foreground transitions (user comes back to the app)
+  useEffect(() => {
+    if (!session) return;
+
+    // Fire once now (throttle inside maybeRecompute will skip if too recent).
+    maybeRecompute();
+
+    // Re-fire whenever the app comes to foreground.
+    const sub = AppState.addEventListener('change', (next: AppStateStatus) => {
+      if (next === 'active') maybeRecompute();
+    });
+    return () => sub.remove();
   }, [session?.user.id]);
 
   // Register for push notifications + handle taps. Done once user has a session.
