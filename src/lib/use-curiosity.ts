@@ -8,13 +8,21 @@
  *   2. Correct     → user_label set, inference_status='corrected'
  *   3. Reject      → place: is_hidden=true; routine: active=false. Dropped from context.
  *
- * Or the user can dismiss the card without answering. We bump `last_asked_at`
- * either way so we don't re-ask for 7 days.
+ * Settled answers (confirm/correct/reject) lock in forever — never re-asked.
+ * "Later" snoozes for 30 days before that specific item can resurface.
+ *
+ * Per-device throttle: at most one curiosity card visible per 24 hours.
+ * The agent should be quiet by default. When it speaks, the question should
+ * feel meaningful, not nagging.
  */
 
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useCallback, useEffect, useState } from 'react';
 import { useAuth } from './auth-context';
 import { supabase } from './supabase';
+
+const LAST_SHOWN_KEY = '@aline/curiosity_last_shown_at';
+const MIN_VISIBLE_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 export type CuriosityItem =
   | {
@@ -47,6 +55,19 @@ export type CuriosityItem =
       };
     };
 
+async function readLastShownMs(): Promise<number | null> {
+  try {
+    const raw = await AsyncStorage.getItem(LAST_SHOWN_KEY);
+    if (!raw) return null;
+    const n = parseInt(raw, 10);
+    return Number.isFinite(n) ? n : null;
+  } catch { return null; }
+}
+
+async function writeLastShownMs(ms: number): Promise<void> {
+  try { await AsyncStorage.setItem(LAST_SHOWN_KEY, String(ms)); } catch {}
+}
+
 export function useCuriosity() {
   const { user } = useAuth();
   const [item, setItem] = useState<CuriosityItem | null>(null);
@@ -59,13 +80,27 @@ export function useCuriosity() {
       return;
     }
     setLoading(true);
+
+    // Per-day display throttle: even if the queue has items, we surface at
+    // most one card every 24 hours per device. After answering or snoozing,
+    // refresh() bumps the throttle so the next card waits a day.
+    const lastShown = await readLastShownMs();
+    if (lastShown && Date.now() - lastShown < MIN_VISIBLE_INTERVAL_MS) {
+      setItem(null);
+      setLoading(false);
+      return;
+    }
+
     const { data, error } = await supabase.rpc('next_curiosity_item');
     if (error) {
       console.warn('[curiosity] load failed:', error.message);
       setItem(null);
     } else {
       const first = (data as Array<{ kind: string; id: string; payload: object }> | null)?.[0];
-      setItem(first ? (first as CuriosityItem) : null);
+      const next = first ? (first as CuriosityItem) : null;
+      setItem(next);
+      // Mark "shown" only if there actually was something to show.
+      if (next) await writeLastShownMs(Date.now());
     }
     setLoading(false);
   }, [user?.id]);

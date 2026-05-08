@@ -9,9 +9,10 @@
  * see fresh inferences. With this, ALINE keeps itself current as long as
  * the user opens the app at least every few hours.
  *
- * Throttle: at most one full run per hour per device. We track the last
- * run timestamp in AsyncStorage. If the user opens the app 10x in an hour,
- * only the first one triggers a recompute.
+ * Throttle: at most one full run per 24 hours per device. The underlying
+ * data only meaningfully changes day-over-day — pings accumulate slowly,
+ * routines need 2+ weeks to form, archetypes shift over weeks. Anything
+ * more aggressive is wasteful Supabase round-trips.
  *
  * Behaviour:
  *   - Runs in the background — never blocks UI.
@@ -29,7 +30,7 @@ import { recomputeRoutinesForCurrentUser } from './routines';
 import { recomputeBehavioralSummaryForCurrentUser } from './summary';
 
 const STORAGE_KEY = '@aline/last_recompute_at';
-const MIN_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
+const MIN_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 type RecomputeStep =
   | 'cluster'
