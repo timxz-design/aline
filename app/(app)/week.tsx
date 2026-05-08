@@ -6,8 +6,10 @@ import {
   Text,
   View,
 } from 'react-native';
+import { CuriosityCard } from '../../src/components/CuriosityCard';
 import { Screen } from '../../src/components/Screen';
 import { useAuth } from '../../src/lib/auth-context';
+import { useCuriosity } from '../../src/lib/use-curiosity';
 import {
   DAY_LABELS,
   addDays,
@@ -39,6 +41,7 @@ export default function WeekScreen() {
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const { item: curiosityItem, refresh: refreshCuriosity } = useCuriosity();
 
   const weekStart = useMemo(() => startOfWeek(selectedDate), [selectedDate]);
   const weekDays = useMemo(
@@ -218,6 +221,11 @@ export default function WeekScreen() {
         contentContainerStyle={styles.scrollBody}
         showsVerticalScrollIndicator={false}
       >
+        {curiosityItem ? (
+          <View style={{ paddingHorizontal: space.lg, paddingBottom: space.md }}>
+            <CuriosityCard item={curiosityItem} onAnswered={refreshCuriosity} />
+          </View>
+        ) : null}
         <View style={styles.timeline}>
           {HOURS.map((h) => (
             <View key={h} style={styles.hourRow}>
