@@ -17,6 +17,9 @@ export type Place = {
   primary_type: string | null;
   category: string | null;
   visit_count: number;
+  ping_count: number;
+  confidence: number | null;
+  geohash_7: string;
   first_seen: string;
   last_seen: string;
   user_label: string | null;
@@ -58,7 +61,7 @@ export function useBehavioralProfile() {
     const [placesRes, routinesRes, summaryRes] = await Promise.all([
       supabase
         .from('places')
-        .select('id, name, primary_type, category, visit_count, first_seen, last_seen, user_label, is_hidden, is_sensitive, inference_status')
+        .select('id, name, primary_type, category, visit_count, ping_count, confidence, geohash_7, first_seen, last_seen, user_label, is_hidden, is_sensitive, inference_status')
         .eq('user_id', userId)
         .order('visit_count', { ascending: false }),
       supabase

@@ -34,6 +34,8 @@ export type CuriosityItem =
         category: string | null;
         primary_type: string | null;
         visit_count: number;
+        ping_count: number;
+        confidence: number | null;
         first_seen: string;
         last_seen: string;
         is_sensitive: boolean;

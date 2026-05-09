@@ -192,26 +192,41 @@ function buildQuestion(item: CuriosityItem): {
     const niceName = p.user_label ?? p.name;
     const cat = p.category ?? p.primary_type;
     const visits = p.visit_count;
+    const confidence = p.confidence ?? 0;
 
-    if (niceName && cat) {
+    // Helper: stats line shown across all variants.
+    const stats =
+      `${visits} visit${visits === 1 ? '' : 's'} ` +
+      `· last seen ${relTime(p.last_seen)}`;
+
+    // Variant A — name + decent confidence (Google match OR strong time-of-day):
+    // soft assertion. Tone is "ALINE noticed".
+    if (niceName && confidence >= 0.7) {
       return {
         text: `Is this ${niceName}?`,
-        subtitle: `${visits} visit${visits === 1 ? '' : 's'} · I labelled it as a ${cat}. Last seen ${relTime(p.last_seen)}.`,
+        subtitle: cat
+          ? `${stats} · I have it as a ${cat}.`
+          : stats,
         yesLabel: 'Yes',
         rejectLabel: 'Not really',
       };
     }
+
+    // Variant B — name + low-mid confidence (auto-inferred from weak signal):
+    // ALINE flags it as a guess explicitly. Less assertive.
     if (niceName) {
       return {
-        text: `I think this is ${niceName}.`,
-        subtitle: `${visits} visit${visits === 1 ? '' : 's'} so far. Right?`,
+        text: `I think this is ${niceName} — am I right?`,
+        subtitle: `${stats} · my guess, not certain.`,
         yesLabel: 'Yes',
         rejectLabel: 'Not really',
       };
     }
+
+    // Variant C — no name. "What is this place?" + tap-to-label flow.
     return {
       text: `What is this place?`,
-      subtitle: `${visits} visits over recent days. Tap "Actually…" to label it.`,
+      subtitle: `${stats} · tap "Actually…" to label it.`,
       yesLabel: "It's a place I go",
       rejectLabel: "Don't track",
     };

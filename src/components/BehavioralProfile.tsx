@@ -13,18 +13,22 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   Alert,
+  Linking,
   Pressable,
   StyleSheet,
   Text,
+  TextInput,
   View,
   type ViewStyle,
 } from 'react-native';
+import { decodeGeohash } from '../lib/clustering';
 import { colors, font, radius, space } from '../theme';
 import {
   confirmRoutine,
   deletePlace,
   hidePlace,
   rejectRoutine,
+  renamePlace,
   unhidePlace,
   useBehavioralProfile,
   type Place,
@@ -172,7 +176,32 @@ export function BehavioralProfile() {
 
 function PlaceRow({ place, onChange }: { place: Place; onChange: () => void }) {
   const [busy, setBusy] = useState(false);
-  const displayName = place.user_label ?? place.name ?? 'Unlabelled place';
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+
+  const displayName = place.user_label ?? place.name ?? 'Unknown place';
+  const isUnlabelled = !place.user_label && !place.name;
+
+  const startEdit = () => {
+    setDraft(place.user_label ?? place.name ?? '');
+    setEditing(true);
+  };
+
+  const saveEdit = useCallback(async () => {
+    const label = draft.trim();
+    if (!label) {
+      setEditing(false);
+      return;
+    }
+    setBusy(true);
+    const result = await renamePlace(place.id, label);
+    setBusy(false);
+    if (result.error) Alert.alert('Failed', result.error);
+    else {
+      setEditing(false);
+      onChange();
+    }
+  }, [draft, place.id, onChange]);
 
   const onHideToggle = useCallback(async () => {
     setBusy(true);
@@ -203,20 +232,73 @@ function PlaceRow({ place, onChange }: { place: Place; onChange: () => void }) {
     );
   }, [place, displayName, onChange]);
 
+  const openInMaps = useCallback(() => {
+    try {
+      const { lat, lon } = decodeGeohash(place.geohash_7);
+      const url = `https://maps.google.com/?q=${lat.toFixed(6)},${lon.toFixed(6)}`;
+      Linking.openURL(url);
+    } catch (e) {
+      Alert.alert('Could not open Maps', String(e));
+    }
+  }, [place.geohash_7]);
+
+  // Edit mode — text input + save / cancel
+  if (editing) {
+    return (
+      <View style={[styles.row, { gap: space.sm }]}>
+        <Text style={styles.symbol}>{categorySymbol(place.category)}</Text>
+        <TextInput
+          value={draft}
+          onChangeText={setDraft}
+          placeholder="What is this place?"
+          placeholderTextColor={colors.textDim}
+          style={styles.input}
+          autoFocus
+          returnKeyType="done"
+          onSubmitEditing={saveEdit}
+          editable={!busy}
+        />
+        <Pressable
+          onPress={saveEdit}
+          disabled={busy || !draft.trim()}
+          hitSlop={6}
+          style={styles.action}
+        >
+          <Text style={[styles.actionText, { color: colors.accent }]}>Save</Text>
+        </Pressable>
+        <Pressable onPress={() => setEditing(false)} disabled={busy} hitSlop={6} style={styles.action}>
+          <Text style={styles.actionText}>Cancel</Text>
+        </Pressable>
+      </View>
+    );
+  }
+
+  // Display mode — tap title to edit, tap maps icon to open coords
   return (
     <View style={[styles.row, place.is_hidden && styles.rowHidden]}>
       <Text style={styles.symbol}>{categorySymbol(place.category)}</Text>
-      <View style={{ flex: 1, gap: 2 }}>
+      <Pressable onPress={startEdit} style={{ flex: 1, gap: 2 }} hitSlop={4}>
         <View style={styles.rowTitleRow}>
-          <Text style={styles.rowTitle} numberOfLines={1}>
+          <Text
+            style={[styles.rowTitle, isUnlabelled && styles.rowTitleUnlabelled]}
+            numberOfLines={1}
+          >
             {displayName}
           </Text>
           {place.is_sensitive ? <Badge label="sensitive" muted /> : null}
+          {isUnlabelled ? <Text style={styles.tapHint}>tap to label</Text> : null}
         </View>
         <Text style={styles.rowMeta}>
-          {categoryLabel(place.category)} · {place.visit_count} visit{place.visit_count === 1 ? '' : 's'}
+          {categoryLabel(place.category)} · {place.visit_count} visit
+          {place.visit_count === 1 ? '' : 's'}
+          {place.ping_count > 0 ? ` · ${place.ping_count} pings` : ''}
         </Text>
-      </View>
+      </Pressable>
+      {isUnlabelled ? (
+        <Pressable onPress={openInMaps} hitSlop={6} style={styles.action}>
+          <Text style={[styles.actionText, { color: colors.accent }]}>Map</Text>
+        </Pressable>
+      ) : null}
       <Pressable onPress={onHideToggle} disabled={busy} hitSlop={6} style={styles.action}>
         <Text style={styles.actionText}>{place.is_hidden ? 'Unhide' : 'Hide'}</Text>
       </Pressable>
@@ -417,6 +499,26 @@ const styles = StyleSheet.create({
     fontSize: font.size.sm,
     fontWeight: font.weight.medium,
     flexShrink: 1,
+  },
+  rowTitleUnlabelled: {
+    color: colors.textMuted,
+    fontStyle: 'italic',
+  },
+  tapHint: {
+    color: colors.accent,
+    fontSize: font.size.xs - 1,
+    fontWeight: font.weight.semibold,
+  },
+  input: {
+    flex: 1,
+    backgroundColor: colors.bgRaised,
+    borderRadius: radius.md,
+    paddingHorizontal: space.sm,
+    paddingVertical: space.xs,
+    color: colors.text,
+    fontSize: font.size.sm,
+    borderWidth: 1,
+    borderColor: colors.border,
   },
   rowMeta: {
     color: colors.textDim,
