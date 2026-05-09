@@ -162,6 +162,63 @@ const TOOLS = [
       required: ['group_id', 'title', 'proposed_start', 'reasoning'],
     },
   },
+  {
+    name: 'find_open_slots',
+    description:
+      "Find open time slots in the user's calendar within a window. Use this BEFORE proposing any calendar change so you know what's actually free vs blocked. Returns slots classified as 'none' (truly empty), 'flexible' (occupied by movable events the user has agreed can be reshuffled), or 'fixed' slots are silently skipped. When a slot is 'flexible', conflicting_events tells you what would need to be moved — you can then build a propose_change_set with both a 'move' op and a 'create' op together.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        duration_minutes: {
+          type: 'integer',
+          description: 'How long the slot needs to be, in minutes.',
+        },
+        earliest: {
+          type: 'string',
+          description:
+            "Earliest acceptable slot start, ISO 8601 in user's LOCAL time (no Z, no offset). E.g. '2026-05-13T08:00:00'. The system applies the user's timezone.",
+        },
+        latest: {
+          type: 'string',
+          description:
+            "Latest acceptable slot end, ISO 8601 in user's LOCAL time. The window length is (latest - earliest).",
+        },
+        time_preference: {
+          type: 'string',
+          enum: ['morning', 'afternoon', 'evening', 'any'],
+          description:
+            "Bias the ranking. 'morning'=6-11, 'afternoon'=13-17, 'evening'=18-22. Use 'any' if user didn't say.",
+        },
+      },
+      required: ['duration_minutes', 'earliest', 'latest'],
+    },
+  },
+  {
+    name: 'propose_change_set',
+    description:
+      "Propose a bundle of calendar operations the user can accept or reject as one atomic unit. NEVER apply changes directly to the calendar — always go through this. Operations are 'move' (shift an existing movable event) and 'create' (add a new event). The user sees a card in chat with three buttons: Accept all / Different time / Cancel. Always include a clear, friendly summary_for_user explaining the WHOLE bundle in one short sentence — not technical details, just the human-readable plan ('Move your gym Wed → Thu so dinner with Marko fits Wed evening').",
+    input_schema: {
+      type: 'object',
+      properties: {
+        summary_for_user: {
+          type: 'string',
+          description:
+            "One short sentence the user will see at the top of the proposal card, explaining the whole bundle.",
+        },
+        operations: {
+          type: 'array',
+          minItems: 1,
+          maxItems: 5,
+          items: {
+            type: 'object',
+            description:
+              "Either a 'move' op (op='move', event_id, new_start, new_end) or a 'create' op (op='create', title, start_at, end_at, event_type). All times are ISO 8601 LOCAL (no Z, no offset). event_type for create must be 'flexible' (default for self-blocks like reading time) or 'goal' (for goal-tied blocks like a planned run). Optional 'reasoning' on each op shows up next to the op in the card.",
+          },
+        },
+      },
+      required: ['summary_for_user', 'operations'],
+    },
+  },
 ] as const;
 
 // ---------- prompt --------------------------------------------------------
@@ -257,6 +314,29 @@ You learn from every conversation. You represent ${firstName} when their agent t
 
   If you don't know which group, ASK ${firstName} which one before calling
   the tool. Don't guess if there are multiple groups.
+
+- **find_open_slots** — Read-only. Use this to figure out where things could
+  fit in ${firstName}'s calendar. Returns a ranked list. Each slot is
+  'none' (genuinely free), 'flexible' (a movable block sits there but can be
+  shuffled), or filtered out entirely if blocked by a fixed event. ALWAYS
+  call this before proposing calendar changes — never guess at availability.
+
+- **propose_change_set** — Use this to actually move things around or add
+  things to ${firstName}'s calendar. NEVER write to the calendar another
+  way. The user sees a card with Accept/Reject buttons; only after they tap
+  Accept does anything actually happen.
+
+  Compose change sets atomically: if making dinner with a friend requires
+  moving a gym block, both ops go in the SAME change set. Don't propose half
+  a plan. The summary_for_user is what the user reads first — make it
+  conversational and clear ("Move your Wed gym to Thu so dinner with Marko
+  fits Wed evening").
+
+  Bundling rule: when the change includes hanging out with friends (a
+  group hangout), call propose_hangout FIRST to get the hangout id, then
+  include a 'create' op in the change set so the corresponding calendar
+  block also lands. The user accepts the calendar side; the friends still
+  see and confirm the hangout via their own apps.
 
 # Time + location context
 
@@ -594,6 +674,27 @@ Deno.serve(async (req: Request) => {
     return jsonRes({ error: 'DB insert failed', detail: insertErr.message }, 500);
   }
 
+  // -------- link change sets to this chat message --------
+  // Any change_set the agent created via propose_change_set this turn needs its
+  // chat_message_id set so the UI can render the proposal card next to the message.
+  const newChangeSetIds: string[] = [];
+  for (const t of toolsExecuted) {
+    if (t.name === 'propose_change_set' && t.ok) {
+      try {
+        const parsed = JSON.parse(t.result) as { change_set_id?: string };
+        if (parsed.change_set_id) newChangeSetIds.push(parsed.change_set_id);
+      } catch { /* ignore */ }
+    }
+  }
+  if (newChangeSetIds.length > 0 && agentMsg?.id) {
+    const { error: linkErr } = await supabase
+      .from('change_sets')
+      .update({ chat_message_id: agentMsg.id, updated_at: new Date().toISOString() })
+      .in('id', newChangeSetIds)
+      .eq('user_id', userId);
+    if (linkErr) console.warn('change_sets link failed:', linkErr.message);
+  }
+
   // -------- persist extracted preferences --------
   if (extracted.length > 0) {
     const interestsToInsert = extracted.map((e) => ({
@@ -690,11 +791,116 @@ function normalizeIsoToUtc(raw: string, userTimezone: string): string | null {
   }
 }
 
+// ---------- slot finder (inlined from _shared/calendar.ts) ----------------
+type CalendarEventLite = {
+  id: string;
+  start_at: string;
+  end_at: string;
+  title: string | null;
+  event_type: string | null;
+  is_movable: boolean;
+};
+type SlotConflictKind = 'none' | 'flexible' | 'fixed';
+type Slot = {
+  start_at: string;
+  end_at: string;
+  conflict: SlotConflictKind;
+  conflicting_events: CalendarEventLite[];
+  score: number;
+};
+type TimePreference = 'morning' | 'afternoon' | 'evening' | 'any';
+
+function _localHour(utcMs: number, timezone: string): number {
+  const dtf = new Intl.DateTimeFormat('en-US', {
+    timeZone: timezone, hour: '2-digit', hour12: false,
+  });
+  const h = parseInt(dtf.format(new Date(utcMs)), 10);
+  return Number.isFinite(h) ? h : 0;
+}
+function _prefScore(localStartHour: number, pref: TimePreference): number {
+  switch (pref) {
+    case 'morning':
+      if (localStartHour >= 6 && localStartHour < 11) return 1.0;
+      if (localStartHour >= 11 && localStartHour < 13) return 0.6;
+      return 0.2;
+    case 'afternoon':
+      if (localStartHour >= 13 && localStartHour < 17) return 1.0;
+      if (localStartHour >= 11 && localStartHour < 13) return 0.7;
+      if (localStartHour >= 17 && localStartHour < 19) return 0.7;
+      return 0.2;
+    case 'evening':
+      if (localStartHour >= 18 && localStartHour < 22) return 1.0;
+      if (localStartHour >= 17 && localStartHour < 18) return 0.7;
+      if (localStartHour >= 22 && localStartHour < 24) return 0.6;
+      return 0.2;
+    default: return 1.0;
+  }
+}
+function _overlap(events: CalendarEventLite[], startMs: number, endMs: number): CalendarEventLite[] {
+  return events.filter((ev) => {
+    const s = new Date(ev.start_at).getTime();
+    const e = new Date(ev.end_at).getTime();
+    return s < endMs && e > startMs;
+  });
+}
+function findOpenSlots(args: {
+  events: CalendarEventLite[];
+  earliest: string; latest: string;
+  duration_minutes: number;
+  user_timezone: string;
+  time_preference?: TimePreference;
+  step_minutes?: number;
+  max_results?: number;
+  earliest_hour?: number;
+  latest_hour?: number;
+}): Slot[] {
+  const {
+    events, earliest, latest, duration_minutes, user_timezone,
+    time_preference = 'any', step_minutes = 30, max_results = 5,
+    earliest_hour = 8, latest_hour = 22,
+  } = args;
+  const earliestMs = new Date(earliest).getTime();
+  const latestMs = new Date(latest).getTime();
+  const stepMs = step_minutes * 60_000;
+  const durationMs = duration_minutes * 60_000;
+  if (latestMs - earliestMs < durationMs) return [];
+  const candidates: Slot[] = [];
+  for (let s = earliestMs; s + durationMs <= latestMs; s += stepMs) {
+    const e = s + durationMs;
+    const hr = _localHour(s, user_timezone);
+    if (hr < earliest_hour || hr > latest_hour) continue;
+    const conflicts = _overlap(events, s, e);
+    const kind: SlotConflictKind = conflicts.length === 0
+      ? 'none'
+      : conflicts.some((c) => !c.is_movable) ? 'fixed' : 'flexible';
+    if (kind === 'fixed') continue;
+    const pref = _prefScore(hr, time_preference);
+    if (pref === 0) continue;
+    const base = kind === 'none' ? 1.0 : 0.5;
+    candidates.push({
+      start_at: new Date(s).toISOString(),
+      end_at: new Date(e).toISOString(),
+      conflict: kind,
+      conflicting_events: kind === 'none' ? [] : conflicts,
+      score: base * pref,
+    });
+  }
+  candidates.sort((a, b) => b.score - a.score);
+  const picked: Slot[] = [];
+  for (const c of candidates) {
+    const cs = new Date(c.start_at).getTime();
+    const tooClose = picked.some((p) => Math.abs(new Date(p.start_at).getTime() - cs) < durationMs);
+    if (!tooClose) picked.push(c);
+    if (picked.length >= max_results) break;
+  }
+  return picked;
+}
+
 // ---------- tool execution ------------------------------------------------
 async function executeTool(
   // deno-lint-ignore no-explicit-any
   supabase: any,
-  _userId: string,
+  userId: string,
   userGroups: GroupRow[],
   userTimezone: string,
   name: string,
@@ -758,6 +964,170 @@ async function executeTool(
     return {
       ok: true,
       message: `Hangout created (id: ${data}). Group "${groupName}" members notified. You're auto-confirmed; the hangout flips to CONFIRMED once enough members are in.`,
+    };
+  }
+
+  if (name === 'find_open_slots') {
+    const duration = Number(input.duration_minutes);
+    const earliestRaw = String(input.earliest ?? '');
+    const latestRaw = String(input.latest ?? '');
+    const timePref = String(input.time_preference ?? 'any') as TimePreference;
+
+    if (!Number.isFinite(duration) || duration <= 0) {
+      return { ok: false, message: 'duration_minutes must be a positive number' };
+    }
+    const earliest = normalizeIsoToUtc(earliestRaw, userTimezone);
+    const latest   = normalizeIsoToUtc(latestRaw,   userTimezone);
+    if (!earliest || !latest) {
+      return { ok: false, message: 'earliest/latest must be ISO 8601 datetimes' };
+    }
+
+    const { data: events, error } = await supabase
+      .from('calendar_events')
+      .select('id, title, start_at, end_at, event_type, is_movable')
+      .eq('user_id', userId)
+      .gte('end_at', earliest)
+      .lte('start_at', latest)
+      .order('start_at', { ascending: true });
+
+    if (error) {
+      return { ok: false, message: `failed to load calendar: ${error.message}` };
+    }
+
+    const slots = findOpenSlots({
+      events: (events ?? []) as CalendarEventLite[],
+      earliest, latest,
+      duration_minutes: duration,
+      user_timezone: userTimezone,
+      time_preference: timePref,
+    });
+
+    // Compact for the model — keep only what it needs to reason
+    const compact = slots.map((s) => ({
+      start_at: s.start_at,
+      end_at: s.end_at,
+      conflict: s.conflict,
+      conflicting_events: s.conflicting_events.map((e) => ({
+        id: e.id, title: e.title, start_at: e.start_at, end_at: e.end_at,
+        event_type: e.event_type, is_movable: e.is_movable,
+      })),
+    }));
+
+    return {
+      ok: true,
+      message: JSON.stringify({ count: compact.length, slots: compact }),
+    };
+  }
+
+  if (name === 'propose_change_set') {
+    const summary = String(input.summary_for_user ?? '').trim();
+    const operationsRaw = Array.isArray(input.operations) ? input.operations : [];
+
+    if (!summary) {
+      return { ok: false, message: 'summary_for_user is required' };
+    }
+    if (operationsRaw.length === 0) {
+      return { ok: false, message: 'at least one operation is required' };
+    }
+    if (operationsRaw.length > 5) {
+      return { ok: false, message: 'too many operations in one change set (max 5)' };
+    }
+
+    // Validate + normalize each op. We keep all string times in UTC after this.
+    const normalized: Record<string, unknown>[] = [];
+    for (const rawOp of operationsRaw) {
+      if (!rawOp || typeof rawOp !== 'object') {
+        return { ok: false, message: 'each operation must be an object' };
+      }
+      const op = rawOp as Record<string, unknown>;
+      const kind = String(op.op ?? '');
+
+      if (kind === 'move') {
+        const eventId = String(op.event_id ?? '');
+        const newStartRaw = String(op.new_start ?? '');
+        const newEndRaw   = String(op.new_end   ?? '');
+        if (!eventId) return { ok: false, message: 'move op missing event_id' };
+        const newStart = normalizeIsoToUtc(newStartRaw, userTimezone);
+        const newEnd   = normalizeIsoToUtc(newEndRaw,   userTimezone);
+        if (!newStart || !newEnd) {
+          return { ok: false, message: `move op times unparseable: ${newStartRaw} / ${newEndRaw}` };
+        }
+        // Preflight: event must exist, belong to user, and be movable.
+        const { data: ev, error: evErr } = await supabase
+          .from('calendar_events')
+          .select('id, user_id, is_movable, title')
+          .eq('id', eventId)
+          .maybeSingle();
+        if (evErr || !ev) {
+          return { ok: false, message: `move target ${eventId} not found` };
+        }
+        if (ev.user_id !== userId) {
+          return { ok: false, message: 'cannot move another user\'s event' };
+        }
+        if (!ev.is_movable) {
+          return { ok: false, message: `event "${ev.title}" is not movable (event_type='fixed' or 'coordinated')` };
+        }
+        normalized.push({
+          op: 'move',
+          event_id: eventId,
+          new_start: newStart,
+          new_end: newEnd,
+          reasoning: op.reasoning ? String(op.reasoning) : undefined,
+        });
+      } else if (kind === 'create') {
+        const title = String(op.title ?? '').trim();
+        const startRaw = String(op.start_at ?? '');
+        const endRaw   = String(op.end_at   ?? '');
+        const evTypeRaw = String(op.event_type ?? 'flexible');
+        if (!title) return { ok: false, message: 'create op missing title' };
+        const startAt = normalizeIsoToUtc(startRaw, userTimezone);
+        const endAt   = normalizeIsoToUtc(endRaw,   userTimezone);
+        if (!startAt || !endAt) {
+          return { ok: false, message: `create op times unparseable: ${startRaw} / ${endRaw}` };
+        }
+        // For v1 the agent can only create user-side blocks. 'fixed' and
+        // 'coordinated' come from external systems / hangouts, not from
+        // free-form proposals.
+        const evType = (evTypeRaw === 'goal' || evTypeRaw === 'flexible') ? evTypeRaw : 'flexible';
+        normalized.push({
+          op: 'create',
+          title,
+          start_at: startAt,
+          end_at: endAt,
+          event_type: evType,
+          description: op.description ? String(op.description) : null,
+          location: op.location ? String(op.location) : null,
+          hangout_id: op.hangout_id ? String(op.hangout_id) : null,
+          goal_id: op.goal_id ? String(op.goal_id) : null,
+          reasoning: op.reasoning ? String(op.reasoning) : undefined,
+        });
+      } else {
+        return { ok: false, message: `unknown op: ${kind} (must be 'move' or 'create')` };
+      }
+    }
+
+    const { data: inserted, error: insertErr } = await supabase
+      .from('change_sets')
+      .insert({
+        user_id: userId,
+        operations: normalized,
+        reasoning: summary,
+        status: 'pending',
+      })
+      .select('id, expires_at')
+      .single();
+
+    if (insertErr || !inserted) {
+      return { ok: false, message: `failed to persist change set: ${insertErr?.message ?? 'unknown'}` };
+    }
+
+    return {
+      ok: true,
+      message: JSON.stringify({
+        change_set_id: inserted.id,
+        operations_count: normalized.length,
+        expires_at: inserted.expires_at,
+      }),
     };
   }
 
