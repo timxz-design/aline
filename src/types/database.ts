@@ -337,6 +337,7 @@ export type Database = {
       places: {
         Row: {
           category: string | null;
+          confidence: number | null;
           created_at: string;
           first_seen: string;
           geohash_5: string;
@@ -349,6 +350,7 @@ export type Database = {
           last_asked_at: string | null;
           last_seen: string;
           name: string | null;
+          ping_count: number;
           primary_type: string | null;
           updated_at: string;
           user_id: string;
@@ -357,6 +359,7 @@ export type Database = {
         };
         Insert: {
           category?: string | null;
+          confidence?: number | null;
           created_at?: string;
           first_seen?: string;
           geohash_5: string;
@@ -369,6 +372,7 @@ export type Database = {
           last_asked_at?: string | null;
           last_seen?: string;
           name?: string | null;
+          ping_count?: number;
           primary_type?: string | null;
           updated_at?: string;
           user_id: string;

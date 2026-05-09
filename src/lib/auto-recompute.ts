@@ -1,138 +1,226 @@
 /**
- * Auto-recompute the behavioral pipeline on app open, throttled.
+ * Auto-recompute the behavioral pipeline.
  *
- * The pipeline:
- *   pings → DBSCAN clusters (places) → Google Places labels (resolve) →
- *   routines → behavioral_summary
+ *   pings → DBSCAN clusters (places) → Google Places resolve → routines →
+ *   behavioral_summary
  *
- * Without this, the user has to manually tap four buttons in Profile to
- * see fresh inferences. With this, ALINE keeps itself current as long as
- * the user opens the app at least every few hours.
+ * Each stage has its own throttle, tracked per-device in AsyncStorage:
  *
- * Throttle: at most one full run per 24 hours per device. The underlying
- * data only meaningfully changes day-over-day — pings accumulate slowly,
- * routines need 2+ weeks to form, archetypes shift over weeks. Anything
- * more aggressive is wasteful Supabase round-trips.
+ *   cluster   — every 24 h. Pings accumulate slowly day-over-day.
+ *   resolve   — event-driven. Runs immediately after cluster IF a new place
+ *               was created this run. The edge function is idempotent
+ *               (skips already-resolved places), so calling it freely is
+ *               cheap.
+ *   routines  — every 7 days. Routines need ≥ 2 weeks of pings to even form
+ *               and barely change once formed.
+ *   summary   — daily for the first 14 days of usage (data quality changing
+ *               rapidly), then on a 7-day clock once data_quality reaches
+ *               'high'. (Implementation: we always attempt summary if
+ *               cluster ran; the function itself is cheap.)
  *
- * Behaviour:
- *   - Runs in the background — never blocks UI.
- *   - All errors swallowed silently. A failed recompute must not crash
- *     the app. Each step has its own internal error handling on top.
- *   - Steps run in order; if one fails, downstream steps are skipped
- *     (because they depend on its output).
+ * The agent should not surface this; the user should never have to think
+ * about a "refresh". This file is the entire interaction surface.
  *
- * To force a fresh run from the UI, pass `force: true`.
+ * Errors: each stage is wrapped in try/catch. Failures are recorded into
+ * the same AsyncStorage state map (last_*_error) and surfaced via
+ * Sentry.captureException. They never crash the app and never block
+ * downstream stages other than for the strict cluster→resolve dependency.
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { recomputePlacesForCurrentUser, resolvePlaceIdentities } from './places';
 import { recomputeRoutinesForCurrentUser } from './routines';
+import { breadcrumb, captureException } from './sentry';
 import { recomputeBehavioralSummaryForCurrentUser } from './summary';
 
-const STORAGE_KEY = '@aline/last_recompute_at';
-const MIN_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const STORAGE_KEY = '@aline/pipeline_state';
 
-type RecomputeStep =
-  | 'cluster'
-  | 'resolve'
-  | 'routines'
-  | 'summary';
+const DAY_MS = 24 * 60 * 60 * 1000;
+const STAGE_INTERVALS = {
+  cluster:  1 * DAY_MS,   // 24h
+  routines: 7 * DAY_MS,   // 7 days
+  summary:  1 * DAY_MS,   // 24h (early-period; mature users see less change)
+} as const;
 
-type RecomputeResult = {
-  ran: boolean;             // false if throttled
-  reason?: 'throttled' | 'no_pings';
-  steps?: Partial<Record<RecomputeStep, { ok: boolean; error?: string }>>;
+export type RecomputeStage = 'cluster' | 'resolve' | 'routines' | 'summary';
+
+type StageStatus = {
+  last_ran_at: number | null;   // ms epoch, null = never
+  last_ok: boolean | null;      // null = never run, true/false = last attempt result
+  last_error: string | null;
 };
 
-async function readLastRunMs(): Promise<number | null> {
+type PipelineState = Record<RecomputeStage, StageStatus>;
+
+const EMPTY_STAGE: StageStatus = { last_ran_at: null, last_ok: null, last_error: null };
+const EMPTY_STATE: PipelineState = {
+  cluster:  { ...EMPTY_STAGE },
+  resolve:  { ...EMPTY_STAGE },
+  routines: { ...EMPTY_STAGE },
+  summary:  { ...EMPTY_STAGE },
+};
+
+async function readState(): Promise<PipelineState> {
   try {
     const raw = await AsyncStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-    const n = parseInt(raw, 10);
-    return Number.isFinite(n) ? n : null;
+    if (!raw) return { ...EMPTY_STATE };
+    const parsed = JSON.parse(raw) as Partial<PipelineState>;
+    return {
+      cluster:  { ...EMPTY_STAGE, ...(parsed.cluster  ?? {}) },
+      resolve:  { ...EMPTY_STAGE, ...(parsed.resolve  ?? {}) },
+      routines: { ...EMPTY_STAGE, ...(parsed.routines ?? {}) },
+      summary:  { ...EMPTY_STAGE, ...(parsed.summary  ?? {}) },
+    };
   } catch {
-    return null;
+    return { ...EMPTY_STATE };
   }
 }
 
-async function writeLastRunMs(ms: number): Promise<void> {
+async function writeState(state: PipelineState): Promise<void> {
   try {
-    await AsyncStorage.setItem(STORAGE_KEY, String(ms));
+    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   } catch {
     // ignore — worst case we run again sooner than throttle target
   }
 }
 
+function isThrottled(stage: keyof typeof STAGE_INTERVALS, status: StageStatus): boolean {
+  if (status.last_ran_at == null) return false;
+  return Date.now() - status.last_ran_at < STAGE_INTERVALS[stage];
+}
+
+function markRan(state: PipelineState, stage: RecomputeStage, ok: boolean, error?: string) {
+  state[stage] = {
+    last_ran_at: Date.now(),
+    last_ok: ok,
+    last_error: ok ? null : (error ?? 'unknown'),
+  };
+}
+
+// ---------- public API -----------------------------------------------------
+
+export type RecomputeResult = {
+  ranAny: boolean;
+  state: PipelineState;
+};
+
 /**
- * Run the full pipeline if the throttle window has elapsed.
- * Safe to call multiple times in quick succession — only the first call
- * within the window will actually run.
+ * Run any pipeline stages whose individual throttle has elapsed. Safe to
+ * call multiple times in quick succession — most calls will no-op.
  *
- * Set `force: true` to skip the throttle check (e.g. after the user
- * pulls-to-refresh or asks the agent something time-sensitive).
+ * `force: true` skips ALL throttles and runs every stage.
  */
 export async function maybeRecompute(opts: { force?: boolean } = {}): Promise<RecomputeResult> {
-  const now = Date.now();
+  const state = await readState();
+  let ranAny = false;
+  const force = opts.force === true;
 
-  if (!opts.force) {
-    const last = await readLastRunMs();
-    if (last && now - last < MIN_INTERVAL_MS) {
-      return { ran: false, reason: 'throttled' };
-    }
-  }
-
-  const steps: NonNullable<RecomputeResult['steps']> = {};
-
-  // Step 1 — cluster pings into places
-  try {
-    const r = await recomputePlacesForCurrentUser();
-    if (r.error) {
-      steps.cluster = { ok: false, error: r.error };
-    } else {
-      steps.cluster = { ok: true };
-      // If there were no pings at all, no point continuing.
-      if (r.pingsRead === 0) {
-        await writeLastRunMs(now);
-        return { ran: true, reason: 'no_pings', steps };
+  // ---- cluster (also drives whether resolve runs) ----
+  let placesAdded = 0;
+  let clusterRan = false;
+  if (force || !isThrottled('cluster', state.cluster)) {
+    breadcrumb('pipeline.cluster start');
+    try {
+      const r = await recomputePlacesForCurrentUser();
+      if (r.error) {
+        markRan(state, 'cluster', false, r.error);
+        captureException(new Error(`cluster: ${r.error}`));
+      } else {
+        markRan(state, 'cluster', true);
+        clusterRan = true;
+        placesAdded = r.placesUpserted ?? 0;
+        // No pings yet → don't run downstream stages.
+        if (r.pingsRead === 0) {
+          await writeState(state);
+          return { ranAny: true, state };
+        }
       }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      markRan(state, 'cluster', false, msg);
+      captureException(e);
     }
-  } catch (e) {
-    steps.cluster = { ok: false, error: e instanceof Error ? e.message : String(e) };
+    ranAny = true;
   }
 
-  // Step 2 — resolve places via Google Places (only places with no google_place_id yet)
-  // This is the only step that costs money. The edge function is idempotent
-  // and skips already-resolved places, so we can call it freely.
-  try {
-    const r = await resolvePlaceIdentities();
-    steps.resolve = r.error ? { ok: false, error: r.error } : { ok: true };
-  } catch (e) {
-    steps.resolve = { ok: false, error: e instanceof Error ? e.message : String(e) };
+  // ---- resolve (event-driven: only if cluster added new places this run) ----
+  // Keep running it occasionally even if no NEW clusters, in case prior
+  // resolve attempts failed (e.g. transient Google API issue).
+  const RESOLVE_RETRY_INTERVAL_MS = 6 * 60 * 60 * 1000; // retry failed resolves every 6h
+  const shouldRetryResolve =
+    state.resolve.last_ok === false &&
+    state.resolve.last_ran_at !== null &&
+    Date.now() - state.resolve.last_ran_at >= RESOLVE_RETRY_INTERVAL_MS;
+  const shouldResolve = force || (clusterRan && (placesAdded > 0)) || shouldRetryResolve;
+  if (shouldResolve) {
+    breadcrumb('pipeline.resolve start', { placesAdded, retry: shouldRetryResolve });
+    try {
+      const r = await resolvePlaceIdentities();
+      if (r.error) {
+        markRan(state, 'resolve', false, r.error);
+        captureException(new Error(`resolve: ${r.error}`));
+      } else {
+        markRan(state, 'resolve', true);
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      markRan(state, 'resolve', false, msg);
+      captureException(e);
+    }
+    ranAny = true;
   }
 
-  // Step 3 — detect routines from pings × places
-  try {
-    const r = await recomputeRoutinesForCurrentUser();
-    steps.routines = r.error ? { ok: false, error: r.error } : { ok: true };
-  } catch (e) {
-    steps.routines = { ok: false, error: e instanceof Error ? e.message : String(e) };
+  // ---- routines (weekly clock) ----
+  if (force || !isThrottled('routines', state.routines)) {
+    breadcrumb('pipeline.routines start');
+    try {
+      const r = await recomputeRoutinesForCurrentUser();
+      if (r.error) {
+        markRan(state, 'routines', false, r.error);
+        captureException(new Error(`routines: ${r.error}`));
+      } else {
+        markRan(state, 'routines', true);
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      markRan(state, 'routines', false, msg);
+      captureException(e);
+    }
+    ranAny = true;
   }
 
-  // Step 4 — collapse everything into the agent-facing archetype text
-  try {
-    const r = await recomputeBehavioralSummaryForCurrentUser();
-    steps.summary = r.error ? { ok: false, error: r.error } : { ok: true };
-  } catch (e) {
-    steps.summary = { ok: false, error: e instanceof Error ? e.message : String(e) };
+  // ---- summary (daily clock) ----
+  if (force || !isThrottled('summary', state.summary)) {
+    breadcrumb('pipeline.summary start');
+    try {
+      const r = await recomputeBehavioralSummaryForCurrentUser();
+      if (r.error) {
+        markRan(state, 'summary', false, r.error);
+        captureException(new Error(`summary: ${r.error}`));
+      } else {
+        markRan(state, 'summary', true);
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      markRan(state, 'summary', false, msg);
+      captureException(e);
+    }
+    ranAny = true;
   }
 
-  await writeLastRunMs(now);
-  return { ran: true, steps };
+  await writeState(state);
+  return { ranAny, state };
 }
 
 /**
- * Clear the throttle state. Useful for tests or after sign-out.
+ * Read-only — used by the PipelineStatus strip to render "last refreshed N
+ * hours ago" + a warning glyph if the most recent attempt errored.
  */
+export async function getPipelineState(): Promise<PipelineState> {
+  return readState();
+}
+
+/** Clear all per-stage throttles. Use sparingly. */
 export async function clearRecomputeThrottle(): Promise<void> {
   try {
     await AsyncStorage.removeItem(STORAGE_KEY);
