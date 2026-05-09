@@ -54,6 +54,7 @@
     "plugins": [
       "expo-router",
       "expo-task-manager",
+      "@sentry/react-native/expo",
       [
         "expo-notifications",
         {

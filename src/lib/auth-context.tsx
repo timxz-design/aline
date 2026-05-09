@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from 'react';
 import { deregisterPushToken } from './push-notifications';
+import { setSentryUser } from './sentry';
 import { supabase } from './supabase';
 
 type AuthState = {
@@ -43,6 +44,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         user: data.session?.user ?? null,
         loading: false,
       });
+      setSentryUser(data.session?.user?.id ?? null);
     });
 
     // Subscribe to all future auth changes
@@ -52,6 +54,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         user: session?.user ?? null,
         loading: false,
       });
+      setSentryUser(session?.user?.id ?? null);
     });
 
     return () => sub.subscription.unsubscribe();

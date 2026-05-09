@@ -6,6 +6,7 @@ import {
   Text,
   View,
 } from 'react-native';
+import { CalendarReconnectBanner } from '../../src/components/CalendarReconnectBanner';
 import { CuriosityCard } from '../../src/components/CuriosityCard';
 import { Screen } from '../../src/components/Screen';
 import { useAuth } from '../../src/lib/auth-context';
@@ -221,6 +222,7 @@ export default function WeekScreen() {
         contentContainerStyle={styles.scrollBody}
         showsVerticalScrollIndicator={false}
       >
+        <CalendarReconnectBanner />
         {curiosityItem ? (
           <View style={{ paddingHorizontal: space.lg, paddingBottom: space.md }}>
             <CuriosityCard item={curiosityItem} onAnswered={refreshCuriosity} />
