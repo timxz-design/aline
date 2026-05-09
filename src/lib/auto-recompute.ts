@@ -143,15 +143,20 @@ export async function maybeRecompute(opts: { force?: boolean } = {}): Promise<Re
     ranAny = true;
   }
 
-  // ---- resolve (event-driven: only if cluster added new places this run) ----
-  // Keep running it occasionally even if no NEW clusters, in case prior
-  // resolve attempts failed (e.g. transient Google API issue).
-  const RESOLVE_RETRY_INTERVAL_MS = 6 * 60 * 60 * 1000; // retry failed resolves every 6h
+  // ---- resolve ----
+  // The edge function is idempotent — it only does work for places whose
+  // google_place_id IS NULL. So firing it every time cluster ran is cheap
+  // and ensures any unresolved places (existing or new) eventually get
+  // looked up. No reason to gate on newPlaces.
+  //
+  // Failed resolves get re-tried independently on a 6h clock, so a transient
+  // Google API hiccup doesn't leave the place unresolved indefinitely.
+  const RESOLVE_RETRY_INTERVAL_MS = 6 * 60 * 60 * 1000;
   const shouldRetryResolve =
     state.resolve.last_ok === false &&
     state.resolve.last_ran_at !== null &&
     Date.now() - state.resolve.last_ran_at >= RESOLVE_RETRY_INTERVAL_MS;
-  const shouldResolve = force || (clusterRan && newPlaces > 0) || shouldRetryResolve;
+  const shouldResolve = force || clusterRan || shouldRetryResolve;
   if (shouldResolve) {
     breadcrumb('pipeline.resolve start', { newPlaces, retry: shouldRetryResolve });
     try {
