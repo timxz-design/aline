@@ -270,6 +270,7 @@ function EventBlock({ event }: { event: CalendarEvent }) {
   const top = ((startMin - dayStartMin) / 60) * HOUR_HEIGHT;
   const height = Math.max(((endMin - startMin) / 60) * HOUR_HEIGHT, 28);
   const accent = EVENT_COLORS[event.event_type ?? 'fixed'] ?? colors.eventFixed;
+  const wasMoved = !!event.original_start_at;
 
   return (
     <View
@@ -278,11 +279,17 @@ function EventBlock({ event }: { event: CalendarEvent }) {
         { top, height, borderLeftColor: accent, backgroundColor: tint(accent) },
       ]}
     >
-      <Text style={styles.eventTitle} numberOfLines={1}>
-        {event.title || 'Untitled'}
-      </Text>
+      <View style={styles.eventTitleRow}>
+        <Text style={styles.eventTitle} numberOfLines={1}>
+          {event.title || 'Untitled'}
+        </Text>
+        {wasMoved ? <Text style={styles.movedBadge}>↔ moved</Text> : null}
+      </View>
       <Text style={styles.eventTime}>
         {formatHM(start)} – {formatHM(end)}
+        {wasMoved && event.original_start_at
+          ? ` · was ${formatHM(new Date(event.original_start_at))}`
+          : ''}
       </Text>
     </View>
   );
@@ -430,10 +437,25 @@ const styles = StyleSheet.create({
     borderLeftWidth: 3,
     justifyContent: 'center',
   },
+  eventTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
   eventTitle: {
     color: colors.text,
     fontSize: 13,
     fontWeight: '600',
+    flexShrink: 1,
+  },
+  movedBadge: {
+    color: colors.accent,
+    fontSize: 10,
+    fontWeight: '600',
+    backgroundColor: colors.accentDim,
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    borderRadius: 4,
   },
   eventTime: {
     color: colors.textMuted,

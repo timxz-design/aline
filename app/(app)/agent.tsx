@@ -10,9 +10,11 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { AgentChangeSetCard } from '../../src/components/AgentChangeSetCard';
 import { Screen } from '../../src/components/Screen';
 import { useAuth } from '../../src/lib/auth-context';
 import { supabase } from '../../src/lib/supabase';
+import { useChangeSets, type PendingChangeSet } from '../../src/lib/use-change-sets';
 import type { ChatMessage } from '../../src/types/database';
 import { colors, font, radius, space } from '../../src/theme';
 
@@ -38,6 +40,7 @@ export default function AgentScreen() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const listRef = useRef<FlatList<ChatMessage>>(null);
+  const { byMessage: changeSetsByMessage } = useChangeSets();
 
   useEffect(() => {
     if (!user) return;
@@ -171,7 +174,13 @@ export default function AgentScreen() {
             data={messages}
             keyExtractor={(m) => m.id}
             contentContainerStyle={styles.messages}
-            renderItem={({ item }) => <Bubble msg={item} />}
+            renderItem={({ item }) => (
+              <Bubble
+                msg={item}
+                changeSet={changeSetsByMessage[item.id]}
+                onPromptDifferentTime={(s) => setDraft(s)}
+              />
+            )}
             ItemSeparatorComponent={() => <View style={{ height: space.sm }} />}
           />
         )}
@@ -221,20 +230,36 @@ export default function AgentScreen() {
   );
 }
 
-function Bubble({ msg }: { msg: ChatMessage }) {
+function Bubble({
+  msg,
+  changeSet,
+  onPromptDifferentTime,
+}: {
+  msg: ChatMessage;
+  changeSet?: PendingChangeSet;
+  onPromptDifferentTime?: (s: string) => void;
+}) {
   const isUser = msg.role === 'user';
   return (
-    <View style={[styles.row, isUser ? styles.rowRight : styles.rowLeft]}>
-      <View
-        style={[
-          styles.bubble,
-          isUser ? styles.bubbleUser : styles.bubbleAgent,
-        ]}
-      >
-        <Text style={[styles.bubbleText, isUser && styles.bubbleTextUser]}>
-          {msg.content}
-        </Text>
+    <View>
+      <View style={[styles.row, isUser ? styles.rowRight : styles.rowLeft]}>
+        <View
+          style={[
+            styles.bubble,
+            isUser ? styles.bubbleUser : styles.bubbleAgent,
+          ]}
+        >
+          <Text style={[styles.bubbleText, isUser && styles.bubbleTextUser]}>
+            {msg.content}
+          </Text>
+        </View>
       </View>
+      {changeSet ? (
+        <AgentChangeSetCard
+          changeSet={changeSet}
+          onPromptDifferentTime={onPromptDifferentTime}
+        />
+      ) : null}
     </View>
   );
 }
