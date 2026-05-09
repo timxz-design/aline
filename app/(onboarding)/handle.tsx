@@ -7,6 +7,7 @@ import {
   Text,
   View,
 } from 'react-native';
+import { BackChevron } from '../../src/components/BackChevron';
 import { Button } from '../../src/components/Button';
 import { Input } from '../../src/components/Input';
 import { Screen } from '../../src/components/Screen';
@@ -53,13 +54,11 @@ export default function OnboardingHandle() {
   const onNext = () => {
     setError(null);
     if (!formatValid) {
-      setError(
-        'Handle must be 3-20 chars, start with a letter, lowercase letters/digits/underscore only.'
-      );
+      setError("Handles need 3–20 characters: letters, digits, and underscores. Has to start with a letter.");
       return;
     }
     if (available === false) {
-      setError('That handle is taken. Try another.');
+      setError('That handle is taken — try another?');
       return;
     }
     setHandle(normalized);
@@ -87,6 +86,7 @@ export default function OnboardingHandle() {
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={styles.kav}
       >
+        <BackChevron />
         <View style={styles.header}>
           <Text style={styles.step}>1 of 3</Text>
           <Text style={styles.title}>Pick a handle</Text>

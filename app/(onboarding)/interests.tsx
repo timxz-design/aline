@@ -1,5 +1,6 @@
 import { useRouter } from 'expo-router';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { BackChevron } from '../../src/components/BackChevron';
 import { Button } from '../../src/components/Button';
 import { Screen } from '../../src/components/Screen';
 import { useOnboarding } from '../../src/lib/onboarding-context';
@@ -15,6 +16,7 @@ export default function OnboardingInterests() {
 
   return (
     <Screen>
+      <BackChevron />
       <View style={styles.header}>
         <Text style={styles.step}>2 of 3</Text>
         <Text style={styles.title}>What are you into?</Text>

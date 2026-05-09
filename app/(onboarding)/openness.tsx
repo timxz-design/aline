@@ -1,6 +1,7 @@
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { BackChevron } from '../../src/components/BackChevron';
 import { Button } from '../../src/components/Button';
 import { Screen } from '../../src/components/Screen';
 import { useAuth } from '../../src/lib/auth-context';
@@ -29,11 +30,13 @@ export default function OnboardingOpenness() {
     }
     // Refresh profile so the auth gate redirects us into the app.
     await refresh();
-    router.replace('/(app)/week');
+    // Land on the agent tab, matching the "meet your agent" promise.
+    router.replace('/(app)/agent');
   };
 
   return (
     <Screen>
+      <BackChevron />
       <View style={styles.header}>
         <Text style={styles.step}>3 of 3</Text>
         <Text style={styles.title}>How social are you feeling?</Text>

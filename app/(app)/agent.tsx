@@ -15,6 +15,7 @@ import { Screen } from '../../src/components/Screen';
 import { useAuth } from '../../src/lib/auth-context';
 import { supabase } from '../../src/lib/supabase';
 import { useChangeSets, type PendingChangeSet } from '../../src/lib/use-change-sets';
+import { useProfile } from '../../src/lib/use-profile';
 import type { ChatMessage } from '../../src/types/database';
 import { colors, font, radius, space } from '../../src/theme';
 
@@ -34,6 +35,7 @@ import { colors, font, radius, space } from '../../src/theme';
  */
 export default function AgentScreen() {
   const { user } = useAuth();
+  const { profile } = useProfile();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState('');
   const [thinking, setThinking] = useState(false);
@@ -167,7 +169,7 @@ export default function AgentScreen() {
             <ActivityIndicator color={colors.accent} />
           </View>
         ) : messages.length === 0 ? (
-          <EmptyAgentState />
+          <EmptyAgentState firstName={profile?.first_name ?? null} />
         ) : (
           <FlatList
             ref={listRef}
@@ -264,20 +266,22 @@ function Bubble({
   );
 }
 
-function EmptyAgentState() {
+function EmptyAgentState({ firstName }: { firstName: string | null }) {
+  const greeting = firstName ? `Hey ${firstName}.` : 'Hey there.';
   return (
     <View style={styles.empty}>
       <Text style={styles.emptyMark}>✦</Text>
-      <Text style={styles.emptyTitle}>I'm your agent.</Text>
+      <Text style={styles.emptyTitle}>{greeting}</Text>
       <Text style={styles.emptyBody}>
-        Tell me about your week, your goals, who you want to spend time with.
-        The more I learn about you, the better I can coordinate with the people
-        in your life.
+        I'm ALINE — your personal agent. Tell me what's going on, or talk like
+        you would to a friend who actually pays attention. I'll learn the
+        rhythms of your week and start coordinating with the people in your
+        life.
       </Text>
       <View style={styles.suggestionList}>
+        <SuggestionChip text='"What does my Tuesday look like?"' />
+        <SuggestionChip text='"Schedule a 1-hour run tomorrow morning"' />
         <SuggestionChip text='"Plan dinner with the crew this week"' />
-        <SuggestionChip text='"I want to start running again"' />
-        <SuggestionChip text='"What does my Friday look like?"' />
       </View>
     </View>
   );
