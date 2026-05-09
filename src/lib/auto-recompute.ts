@@ -116,7 +116,7 @@ export async function maybeRecompute(opts: { force?: boolean } = {}): Promise<Re
   const force = opts.force === true;
 
   // ---- cluster (also drives whether resolve runs) ----
-  let placesAdded = 0;
+  let newPlaces = 0;
   let clusterRan = false;
   if (force || !isThrottled('cluster', state.cluster)) {
     breadcrumb('pipeline.cluster start');
@@ -128,7 +128,7 @@ export async function maybeRecompute(opts: { force?: boolean } = {}): Promise<Re
       } else {
         markRan(state, 'cluster', true);
         clusterRan = true;
-        placesAdded = r.placesUpserted ?? 0;
+        newPlaces = r.newPlacesCreated ?? 0;
         // No pings yet → don't run downstream stages.
         if (r.pingsRead === 0) {
           await writeState(state);
@@ -151,9 +151,9 @@ export async function maybeRecompute(opts: { force?: boolean } = {}): Promise<Re
     state.resolve.last_ok === false &&
     state.resolve.last_ran_at !== null &&
     Date.now() - state.resolve.last_ran_at >= RESOLVE_RETRY_INTERVAL_MS;
-  const shouldResolve = force || (clusterRan && (placesAdded > 0)) || shouldRetryResolve;
+  const shouldResolve = force || (clusterRan && newPlaces > 0) || shouldRetryResolve;
   if (shouldResolve) {
-    breadcrumb('pipeline.resolve start', { placesAdded, retry: shouldRetryResolve });
+    breadcrumb('pipeline.resolve start', { newPlaces, retry: shouldRetryResolve });
     try {
       const r = await resolvePlaceIdentities();
       if (r.error) {
