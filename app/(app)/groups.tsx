@@ -2,6 +2,7 @@ import { useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
+  Animated,
   FlatList,
   Modal,
   Pressable,
@@ -9,6 +10,7 @@ import {
   Text,
   View,
 } from 'react-native';
+import { Swipeable } from 'react-native-gesture-handler';
 import { AddMembersModal } from '../../src/components/AddMembersModal';
 import { Button } from '../../src/components/Button';
 import { Input } from '../../src/components/Input';
@@ -34,6 +36,7 @@ type GroupRow = {
   member_count: number;
   member_ids: string[];
   hangouts: HangoutWithResponses[];
+  muted_until: string | null;
 };
 
 export default function GroupsScreen() {
@@ -50,7 +53,7 @@ export default function GroupsScreen() {
     setLoading(true);
     const { data: memberships, error: mErr } = await supabase
       .from('group_members')
-      .select('group_id')
+      .select('group_id, muted_until')
       .eq('user_id', user.id);
     if (mErr || !memberships) {
       console.warn('Membership load failed:', mErr?.message);
@@ -59,6 +62,9 @@ export default function GroupsScreen() {
       return;
     }
     const groupIds = memberships.map((m) => m.group_id);
+    const mutedByGroup = new Map<string, string | null>(
+      memberships.map((m) => [m.group_id, m.muted_until ?? null])
+    );
     groupIdsRef.current = groupIds;
     if (groupIds.length === 0) {
       setGroups([]);
@@ -78,6 +84,7 @@ export default function GroupsScreen() {
           .select('*')
           .in('group_id', groupIds)
           .in('status', ['proposing', 'confirmed'])
+          .or(`proposed_start.is.null,proposed_start.gte.${new Date().toISOString()}`)
           .order('proposed_start', { ascending: true }),
       ]);
 
@@ -132,6 +139,7 @@ export default function GroupsScreen() {
           member_count: ids.length,
           member_ids: ids,
           hangouts: hangoutsByGroup.get(g.id) ?? [],
+          muted_until: mutedByGroup.get(g.id) ?? null,
         };
       })
     );
@@ -223,7 +231,11 @@ export default function GroupsScreen() {
           )
         }
         renderItem={({ item }) => (
-          <GroupCard group={item} onAddMembers={() => setAddingTo(item)} />
+          <SwipeableGroupCard
+            group={item}
+            onAddMembers={() => setAddingTo(item)}
+            onRefresh={loadGroups}
+          />
         )}
         ItemSeparatorComponent={() => <View style={{ height: space.md }} />}
         refreshing={loading}
@@ -255,17 +267,151 @@ export default function GroupsScreen() {
   );
 }
 
-function GroupCard({
+const MUTE_OPTIONS = [
+  { label: '1 hour',  hours: 1 },
+  { label: '8 hours', hours: 8 },
+  { label: '24 hours', hours: 24 },
+  { label: '1 week',  hours: 24 * 7 },
+];
+
+function SwipeableGroupCard({
   group,
   onAddMembers,
+  onRefresh,
 }: {
   group: GroupRow;
   onAddMembers: () => void;
+  onRefresh: () => void;
+}) {
+  const { user } = useAuth();
+  const swipeRef = useRef<Swipeable>(null);
+  const isMuted = group.muted_until ? new Date(group.muted_until) > new Date() : false;
+
+  const handleLeave = () => {
+    Alert.alert(
+      'Leave group?',
+      `You'll be removed from "${group.name}".`,
+      [
+        { text: 'Cancel', style: 'cancel', onPress: () => swipeRef.current?.close() },
+        {
+          text: 'Leave',
+          style: 'destructive',
+          onPress: async () => {
+            await supabase
+              .from('group_members')
+              .delete()
+              .eq('group_id', group.id)
+              .eq('user_id', user!.id);
+            onRefresh();
+          },
+        },
+      ]
+    );
+  };
+
+  const handleMute = () => {
+    swipeRef.current?.close();
+    if (isMuted) {
+      // Already muted — offer to unmute
+      Alert.alert('Unmute group?', `"${group.name}" is currently muted.`, [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Unmute',
+          onPress: async () => {
+            await supabase
+              .from('group_members')
+              .update({ muted_until: null })
+              .eq('group_id', group.id)
+              .eq('user_id', user!.id);
+            onRefresh();
+          },
+        },
+      ]);
+      return;
+    }
+    Alert.alert(
+      'Mute notifications',
+      `Mute "${group.name}" for how long?`,
+      [
+        ...MUTE_OPTIONS.map(({ label, hours }) => ({
+          text: label,
+          onPress: async () => {
+            const until = new Date(Date.now() + hours * 3_600_000).toISOString();
+            await supabase
+              .from('group_members')
+              .update({ muted_until: until })
+              .eq('group_id', group.id)
+              .eq('user_id', user!.id);
+            onRefresh();
+          },
+        })),
+        { text: 'Cancel', style: 'cancel' as const },
+      ]
+    );
+  };
+
+  const renderRightActions = (
+    progress: Animated.AnimatedInterpolation<number>
+  ) => {
+    const muteTranslate = progress.interpolate({
+      inputRange: [0, 1], outputRange: [160, 0],
+    });
+    const deleteTranslate = progress.interpolate({
+      inputRange: [0, 1], outputRange: [80, 0],
+    });
+    return (
+      <View style={styles.swipeActionsContainer}>
+        <Animated.View style={{ transform: [{ translateX: muteTranslate }] }}>
+          <Pressable
+            style={[styles.swipeAction, styles.muteAction]}
+            onPress={handleMute}
+          >
+            <Text style={styles.swipeActionText}>
+              {isMuted ? 'Unmute' : 'Mute'}
+            </Text>
+          </Pressable>
+        </Animated.View>
+        <Animated.View style={{ transform: [{ translateX: deleteTranslate }] }}>
+          <Pressable
+            style={[styles.swipeAction, styles.leaveAction]}
+            onPress={handleLeave}
+          >
+            <Text style={styles.swipeActionText}>Leave</Text>
+          </Pressable>
+        </Animated.View>
+      </View>
+    );
+  };
+
+  return (
+    <Swipeable
+      ref={swipeRef}
+      renderRightActions={renderRightActions}
+      rightThreshold={40}
+      overshootRight={false}
+      friction={2}
+    >
+      <GroupCard group={group} onAddMembers={onAddMembers} isMuted={isMuted} />
+    </Swipeable>
+  );
+}
+
+function GroupCard({
+  group,
+  onAddMembers,
+  isMuted,
+}: {
+  group: GroupRow;
+  onAddMembers: () => void;
+  isMuted?: boolean;
 }) {
   return (
-    <View style={styles.card}>
+    <View style={[styles.card, isMuted && { opacity: 0.6 }]}>
       <View style={styles.cardHeader}>
-        <Text style={styles.cardTitle}>{group.name}</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+          <Text style={styles.cardTitle}>{group.name}</Text>
+          {isMuted ? <Text style={styles.mutedBadge}>muted</Text> : null}
+        </View>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
           <Text style={styles.cardMembers}>
             {group.member_count} {group.member_count === 1 ? 'member' : 'members'}
@@ -404,6 +550,17 @@ function HangoutCard({
             variant="danger"
           />
         </View>
+      ) : null}
+      {isConfirmed && myStatus === 'confirmed' ? (
+        <Pressable
+          onPress={() => respond('declined')}
+          disabled={!!responding}
+          style={({ pressed }) => [styles.cantMakeItBtn, pressed && { opacity: 0.6 }]}
+        >
+          <Text style={styles.cantMakeItText}>
+            {responding === 'declined' ? '…' : "Can't make it"}
+          </Text>
+        </Pressable>
       ) : null}
     </View>
   );
@@ -711,5 +868,59 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: space.md,
     marginTop: space.md,
+  },
+  cantMakeItBtn: {
+    alignSelf: 'flex-start',
+    marginLeft: 16,
+    marginTop: 2,
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  cantMakeItText: {
+    color: colors.textDim,
+    fontSize: 11,
+    fontWeight: '500',
+  },
+  swipeActionsContainer: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    marginLeft: space.md,
+  },
+  swipeAction: {
+    width: 80,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderRadius: radius.lg,
+  },
+  muteAction: {
+    backgroundColor: colors.bgRaised,
+    borderWidth: 1,
+    borderColor: colors.border,
+    marginRight: 6,
+  },
+  leaveAction: {
+    backgroundColor: 'rgba(248,113,113,0.15)',
+    borderWidth: 1,
+    borderColor: colors.danger,
+  },
+  swipeActionText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: colors.text,
+  },
+  mutedBadge: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: colors.textDim,
+    backgroundColor: colors.bgRaised,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: radius.pill,
+    letterSpacing: 0.5,
   },
 });

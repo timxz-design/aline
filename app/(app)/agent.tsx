@@ -141,11 +141,14 @@ export default function AgentScreen() {
     }
   };
 
-  // Auto-scroll to bottom on new messages
+  // Auto-scroll to bottom on new messages and after initial load
   useEffect(() => {
     if (messages.length > 0) {
+      // Double rAF ensures the list has finished layout before scrolling
       requestAnimationFrame(() => {
-        listRef.current?.scrollToEnd({ animated: true });
+        requestAnimationFrame(() => {
+          listRef.current?.scrollToEnd({ animated: messages.length > 1 });
+        });
       });
     }
   }, [messages.length]);

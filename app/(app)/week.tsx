@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Pressable,
   ScrollView,
@@ -43,6 +43,13 @@ export default function WeekScreen() {
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const { item: curiosityItem, refresh: refreshCuriosity } = useCuriosity();
+
+  // Current time — updates every minute so the red line stays accurate.
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 60_000);
+    return () => clearInterval(id);
+  }, []);
 
   const weekStart = useMemo(() => startOfWeek(selectedDate), [selectedDate]);
   const weekDays = useMemo(
@@ -240,6 +247,9 @@ export default function WeekScreen() {
           {eventsForSelectedDay.map((ev) => (
             <EventBlock key={ev.id} event={ev} />
           ))}
+          {sameDay(selectedDate, now) ? (
+            <CurrentTimeLine now={now} />
+          ) : null}
           {!loading && eventsForSelectedDay.length === 0 ? (
             <View style={styles.emptyHint}>
               <Text style={styles.emptyTitle}>No events yet</Text>
@@ -251,6 +261,21 @@ export default function WeekScreen() {
         </View>
       </ScrollView>
     </Screen>
+  );
+}
+
+function CurrentTimeLine({ now }: { now: Date }) {
+  const totalMinutes = now.getHours() * 60 + now.getMinutes();
+  const dayStartMin = HOURS[0] * 60;
+  const dayEndMin = (HOURS[HOURS.length - 1] + 1) * 60;
+  // Don't render if outside the visible hour range
+  if (totalMinutes < dayStartMin || totalMinutes > dayEndMin) return null;
+  const top = ((totalMinutes - dayStartMin) / 60) * HOUR_HEIGHT;
+  return (
+    <View style={[styles.nowLine, { top }]} pointerEvents="none">
+      <View style={styles.nowDot} />
+      <View style={styles.nowLineBar} />
+    </View>
   );
 }
 
@@ -482,5 +507,26 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     fontSize: 13,
     textAlign: 'center',
+  },
+  nowLine: {
+    position: 'absolute',
+    left: space.lg + 48,
+    right: space.lg,
+    flexDirection: 'row',
+    alignItems: 'center',
+    zIndex: 10,
+  },
+  nowDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: colors.danger,
+    marginLeft: -5,
+  },
+  nowLineBar: {
+    flex: 1,
+    height: 2,
+    backgroundColor: colors.danger,
+    opacity: 0.85,
   },
 });

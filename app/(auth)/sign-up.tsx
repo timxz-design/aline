@@ -21,11 +21,9 @@ export default function SignUp() {
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
 
   const onSubmit = async () => {
     setError(null);
-    setSuccess(null);
 
     if (!email.trim() || !password || !firstName.trim()) {
       setError('Enter your name, email, and password to create your account.');
@@ -49,11 +47,7 @@ export default function SignUp() {
       return;
     }
 
-    setSuccess(
-      'Account created. If email confirmation is on, check your inbox first. Otherwise, sign in below.'
-    );
-    // Brief pause so the user sees the message, then route to sign-in.
-    setTimeout(() => router.replace('/(auth)/sign-in'), 1200);
+    router.replace({ pathname: '/(auth)/check-email', params: { email: email.trim() } });
   };
 
   return (
@@ -97,11 +91,6 @@ export default function SignUp() {
               <Text style={styles.errorText}>{error}</Text>
             </View>
           ) : null}
-          {success ? (
-            <View style={styles.successBox}>
-              <Text style={styles.successText}>{success}</Text>
-            </View>
-          ) : null}
 
           <Button label="Create account" onPress={onSubmit} loading={submitting} />
         </View>
@@ -139,12 +128,4 @@ const styles = StyleSheet.create({
     padding: space.md,
   },
   errorText: { color: colors.danger, fontSize: 13, lineHeight: 18 },
-  successBox: {
-    backgroundColor: colors.accentDim,
-    borderWidth: 1,
-    borderColor: colors.accent,
-    borderRadius: radius.md,
-    padding: space.md,
-  },
-  successText: { color: colors.accent, fontSize: 13, lineHeight: 18 },
 });

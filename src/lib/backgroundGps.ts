@@ -80,10 +80,9 @@ export async function requestLocationPermissions(): Promise<boolean> {
 // are iOS-only; accessing them on Android returns undefined and crashes at
 // module load time if evaluated eagerly.
 function buildTaskOptions(): Location.LocationTaskOptions {
-  // Testing-friendly cadence: 2 min / 30 m. Production should dial back to
-  // 15 min / 50 m for battery (TODO before public launch).
-  const TIME_MS = 2 * 60 * 1000;
-  const DIST_M  = 30;
+  // Production cadence: 15 min / 50 m for battery.
+  const TIME_MS = 15 * 60 * 1000;
+  const DIST_M  = 50;
 
   const base: Location.LocationTaskOptions = {
     accuracy: Location.Accuracy.Balanced,

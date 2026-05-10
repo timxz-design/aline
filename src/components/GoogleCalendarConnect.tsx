@@ -46,7 +46,7 @@ export function GoogleCalendarConnect() {
   //                        phone testing.
   // Drop the path segment so the URI exactly matches what's registered.
   const redirectUri = AuthSession.makeRedirectUri({
-    scheme: 'aline',
+    native: 'com.googleusercontent.apps.509292620550-d4qjje04rltcuanidbhh6vd923e7v4ok:/oauth2callback',
   });
 
   const [request, response, promptAsync] = AuthSession.useAuthRequest(

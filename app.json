@@ -2,7 +2,7 @@
   "expo": {
     "name": "ALINE",
     "slug": "aline-app",
-    "scheme": "aline",
+    "scheme": ["aline", "com.googleusercontent.apps.509292620550-d4qjje04rltcuanidbhh6vd923e7v4ok"],
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -16,11 +16,13 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "app.aline.mvp",
+      "buildNumber": "3",
       "infoPlist": {
         "NSCalendarsUsageDescription": "ALINE reads your calendar to coordinate hangouts with your friend groups.",
         "NSContactsUsageDescription": "ALINE uses contacts to help you invite friends to your groups.",
         "NSLocationWhenInUseUsageDescription": "ALINE uses your location to suggest meetup spots that work for everyone.",
-        "NSLocationAlwaysAndWhenInUseUsageDescription": "ALINE learns your routines (gym, university, home) so it can suggest the best times for your group to hang out."
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "ALINE learns your routines (gym, university, home) so it can suggest the best times for your group to hang out.",
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
@@ -54,7 +56,10 @@
     "plugins": [
       "expo-router",
       "expo-task-manager",
-      "@sentry/react-native/expo",
+      ["@sentry/react-native/expo", {
+        "organization": "alineai",
+        "project": "react-native"
+      }],
       [
         "expo-notifications",
         {

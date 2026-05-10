@@ -354,6 +354,8 @@ Social openness: ${socialOpenness ?? 'not set yet'}
 Behavioral profile (learned from observed routines, data quality: ${behavioralSummary?.data_quality ?? 'none'}):
 ${behavioralSummary?.archetype_text ?? 'Not yet enough data — keep tracking, the picture will fill in.'}
 
+Note: place labels (Home, Work, etc.) are inferred from GPS patterns and Google Places — they are educated guesses, not confirmed facts. Treat them with appropriate humility. If ${firstName} mentions a place, check your assumption ("I think that's your gym — is that right?") rather than stating it as fact.
+
 Active goals:
 ${goalLines}
 

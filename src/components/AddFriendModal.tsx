@@ -102,6 +102,7 @@ export function AddFriendModal({
                 }}
                 autoCapitalize="none"
                 autoCorrect={false}
+                textContentType="username"
                 maxLength={20}
                 autoFocus
                 style={{ flex: 1 }}

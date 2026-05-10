@@ -57,12 +57,9 @@ Deno.serve(async (req: Request) => {
   }
   if (req.method !== 'POST') return jsonRes({ error: 'POST required' }, 405);
 
-  if (!GOOGLE_OAUTH_CLIENT_ID || !GOOGLE_OAUTH_CLIENT_SECRET) {
+  if (!GOOGLE_OAUTH_CLIENT_ID) {
     return jsonRes(
-      {
-        error:
-          'Google OAuth not configured. Set GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET in Supabase secrets.',
-      },
+      { error: 'Google OAuth not configured. Set GOOGLE_OAUTH_CLIENT_ID in Supabase secrets.' },
       500
     );
   }
@@ -94,10 +91,13 @@ Deno.serve(async (req: Request) => {
   const params = new URLSearchParams({
     code: body.code,
     client_id: GOOGLE_OAUTH_CLIENT_ID,
-    client_secret: GOOGLE_OAUTH_CLIENT_SECRET,
     redirect_uri: body.redirect_uri,
     grant_type: 'authorization_code',
   });
+  // iOS OAuth clients have no client secret — only include it for Web clients.
+  if (GOOGLE_OAUTH_CLIENT_SECRET) {
+    params.set('client_secret', GOOGLE_OAUTH_CLIENT_SECRET);
+  }
   if (body.code_verifier) {
     params.set('code_verifier', body.code_verifier);
   }

@@ -61,7 +61,7 @@ Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS_HEADERS });
   if (req.method !== 'POST') return jsonRes({ error: 'POST required' }, 405);
 
-  if (!GOOGLE_OAUTH_CLIENT_ID || !GOOGLE_OAUTH_CLIENT_SECRET) {
+  if (!GOOGLE_OAUTH_CLIENT_ID) {
     return jsonRes({ error: 'Google OAuth not configured.' }, 500);
   }
 
@@ -255,15 +255,19 @@ async function refreshAccessToken(
   | { ok: true; access_token: string; expires_in: number }
   | { ok: false; detail: string }
 > {
+  const refreshParams = new URLSearchParams({
+    client_id: GOOGLE_OAUTH_CLIENT_ID!,
+    refresh_token: refreshToken,
+    grant_type: 'refresh_token',
+  });
+  // iOS OAuth clients have no client secret — only include for Web clients.
+  if (GOOGLE_OAUTH_CLIENT_SECRET) {
+    refreshParams.set('client_secret', GOOGLE_OAUTH_CLIENT_SECRET);
+  }
   const res = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      client_id: GOOGLE_OAUTH_CLIENT_ID!,
-      client_secret: GOOGLE_OAUTH_CLIENT_SECRET!,
-      refresh_token: refreshToken,
-      grant_type: 'refresh_token',
-    }).toString(),
+    body: refreshParams.toString(),
   });
   if (!res.ok) {
     return { ok: false, detail: await res.text() };
