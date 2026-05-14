@@ -187,6 +187,8 @@ export default function AgentScreen() {
               />
             )}
             ItemSeparatorComponent={() => <View style={{ height: space.sm }} />}
+            onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: false })}
+            onLayout={() => listRef.current?.scrollToEnd({ animated: false })}
           />
         )}
 

@@ -6,12 +6,12 @@ import {
   Pressable,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from 'react-native';
 import { supabase } from '../lib/supabase';
 import { colors, font, radius, space } from '../theme';
 import { Button } from './Button';
-import { Input } from './Input';
 
 type Status =
   | 'request_sent'
@@ -92,8 +92,9 @@ export function AddFriendModal({
 
             <View style={styles.inputRow}>
               <Text style={styles.atSign}>@</Text>
-              <Input
+              <TextInput
                 placeholder="handle"
+                placeholderTextColor={colors.textDim}
                 value={handle}
                 onChangeText={(t) => {
                   setHandle(t.toLowerCase().replace(/\s/g, ''));
@@ -102,10 +103,12 @@ export function AddFriendModal({
                 }}
                 autoCapitalize="none"
                 autoCorrect={false}
-                textContentType="username"
+                textContentType="none"
+                secureTextEntry={false}
+                keyboardType="default"
                 maxLength={20}
                 autoFocus
-                style={{ flex: 1 }}
+                style={styles.handleInput}
               />
             </View>
 
@@ -161,5 +164,16 @@ const styles = StyleSheet.create({
   atSign: { color: colors.textMuted, fontSize: 22, fontWeight: '600' },
   statusText: { fontSize: 13, color: colors.textMuted, marginLeft: 24 },
   errorText: { color: colors.danger, fontSize: 13, marginLeft: 24 },
+  handleInput: {
+    flex: 1,
+    color: colors.text,
+    fontSize: 15,
+    paddingHorizontal: space.md,
+    paddingVertical: 12,
+    backgroundColor: colors.bgElevated,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+  },
   actions: { flexDirection: 'row', gap: space.md, marginTop: space.sm },
 });

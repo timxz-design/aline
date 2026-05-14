@@ -115,6 +115,9 @@ export default function GroupsScreen() {
 
     const hangoutsByGroup = new Map<string, HangoutWithResponses[]>();
     (hangouts ?? []).forEach((h) => {
+      // Direct hangouts have group_id = null — they never reach this screen
+      // (filtered out by .in('group_id', groupIds) above). Guard so TS is happy.
+      if (!h.group_id) return;
       const all = responsesByHangout.get(h.id) ?? [];
       const mine = all.find((r) => r.user_id === user.id) ?? null;
       const enriched: HangoutWithResponses = {

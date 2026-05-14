@@ -1,13 +1,15 @@
 import { useFocusEffect } from 'expo-router';
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import {
   Alert,
+  Animated,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
   View,
 } from 'react-native';
+import { Swipeable } from 'react-native-gesture-handler';
 import { AddFriendModal } from '../../src/components/AddFriendModal';
 import { BehavioralProfile } from '../../src/components/BehavioralProfile';
 import { Button } from '../../src/components/Button';
@@ -185,7 +187,9 @@ export default function ProfileScreen() {
                 No friends yet. Add someone by their handle to get started.
               </Text>
             ) : (
-              friends.map((f) => <FriendRow key={f.id} friend={f} />)
+              friends.map((f) => (
+                <FriendRow key={f.id} friend={f} onUnfriended={refreshFriends} />
+              ))
             )}
           </View>
 
@@ -311,23 +315,78 @@ export default function ProfileScreen() {
   );
 }
 
-function FriendRow({ friend }: { friend: FriendProfile }) {
+function FriendRow({
+  friend,
+  onUnfriended,
+}: {
+  friend: FriendProfile;
+  onUnfriended: () => void;
+}) {
+  const swipeRef = useRef<Swipeable>(null);
+
+  const confirmUnfriend = () => {
+    const label = friend.first_name ?? friend.handle ?? 'this friend';
+    Alert.alert(
+      `Unfriend ${label}?`,
+      "You'll need to send a new request if you want to add them back later.",
+      [
+        { text: 'Cancel', style: 'cancel', onPress: () => swipeRef.current?.close() },
+        {
+          text: 'Unfriend',
+          style: 'destructive',
+          onPress: async () => {
+            const { error } = await supabase.rpc('unfriend', { _other_user: friend.id });
+            if (error) {
+              Alert.alert('Could not unfriend', error.message);
+              return;
+            }
+            onUnfriended();
+          },
+        },
+      ]
+    );
+  };
+
+  const renderRightActions = (
+    progress: Animated.AnimatedInterpolation<number>
+  ) => {
+    const translate = progress.interpolate({
+      inputRange: [0, 1],
+      outputRange: [80, 0],
+    });
+    return (
+      <Animated.View style={{ transform: [{ translateX: translate }] }}>
+        <Pressable style={styles.unfriendAction} onPress={confirmUnfriend}>
+          <Text style={styles.unfriendActionText}>Unfriend</Text>
+        </Pressable>
+      </Animated.View>
+    );
+  };
+
   return (
-    <View style={styles.friendRow}>
-      <View style={styles.friendAvatar}>
-        <Text style={styles.friendAvatarText}>
-          {(friend.first_name?.[0] ?? friend.handle?.[0] ?? '?').toUpperCase()}
-        </Text>
+    <Swipeable
+      ref={swipeRef}
+      renderRightActions={renderRightActions}
+      rightThreshold={40}
+      overshootRight={false}
+      friction={2}
+    >
+      <View style={styles.friendRow}>
+        <View style={styles.friendAvatar}>
+          <Text style={styles.friendAvatarText}>
+            {(friend.first_name?.[0] ?? friend.handle?.[0] ?? '?').toUpperCase()}
+          </Text>
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.friendName}>
+            {friend.first_name ?? friend.display_name ?? 'Unnamed'}
+          </Text>
+          {friend.handle ? (
+            <Text style={styles.friendHandle}>@{friend.handle}</Text>
+          ) : null}
+        </View>
       </View>
-      <View style={{ flex: 1 }}>
-        <Text style={styles.friendName}>
-          {friend.first_name ?? friend.display_name ?? 'Unnamed'}
-        </Text>
-        {friend.handle ? (
-          <Text style={styles.friendHandle}>@{friend.handle}</Text>
-        ) : null}
-      </View>
-    </View>
+    </Swipeable>
   );
 }
 
@@ -601,6 +660,17 @@ const styles = StyleSheet.create({
   friendAvatarText: { color: colors.text, fontSize: 14, fontWeight: '700' },
   friendName: { color: colors.text, fontSize: 14, fontWeight: '600' },
   friendHandle: { color: colors.textMuted, fontSize: 12 },
+  unfriendAction: {
+    width: 80,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(248,113,113,0.15)',
+    borderWidth: 1,
+    borderColor: colors.danger,
+    borderRadius: radius.md,
+    marginLeft: space.sm,
+  },
+  unfriendActionText: { color: colors.text, fontSize: 13, fontWeight: '600' },
   miniBtn: {
     paddingHorizontal: 12,
     paddingVertical: 6,

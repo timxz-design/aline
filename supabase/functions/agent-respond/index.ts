@@ -63,6 +63,31 @@ type GroupRow = {
   group_type: string | null;
 };
 
+type GroupMemberRow = {
+  id: string;
+  handle: string | null;
+  first_name: string | null;
+};
+
+type FriendRow = {
+  id: string;
+  handle: string | null;
+  first_name: string | null;
+};
+
+type UpcomingHangoutRow = {
+  id: string;
+  title: string;
+  proposed_start: string | null;
+  status: string | null;
+  // "who" is rendered for the prompt; for groups this is the group name,
+  // for direct it's the other user's handle.
+  who_label: string;
+  // The agent needs the kind so it can pick the right RPC if it needs to
+  // reschedule (cancel_hangout works for both; update_hangout for both).
+  kind: 'group' | 'direct';
+};
+
 type BehavioralSummaryRow = {
   archetype_text: string | null;
   data_quality: string | null;
@@ -110,14 +135,21 @@ const TOOLS = [
   {
     name: 'propose_hangout',
     description:
-      "Propose a hangout for one of the user's groups. All group members will see the proposal in their app and can confirm/decline. Use this when the user asks to plan, organize, or coordinate something with their group. Don't use it for casual mentions — only when they actually want to make plans.",
+      "Create a hangout — either with a whole group (set group_id) or 1-on-1 with a single friend (set direct_friend_handle). Exactly ONE of {group_id, direct_friend_handle} must be set. " +
+      "ONLY call this AFTER you have (1) called find_mutual_slots to verify the time works for everyone, AND (2) presented the time + reasoning to the user in chat and they confirmed (\"sounds good\", \"yes\", \"let's do it\"). Never call propose_hangout on the first turn unless the user explicitly gives a specific time AND you already verified it. " +
+      "The hangout is auto-confirmed for the user. Other participants see it as pending until they respond.",
     input_schema: {
       type: 'object',
       properties: {
         group_id: {
           type: 'string',
           description:
-            "UUID of the group. MUST be one of the user's group IDs listed in the system prompt.",
+            "UUID of the group, if this is a group hangout. MUST be one of the user's group IDs listed in the system prompt. Mutually exclusive with direct_friend_handle.",
+        },
+        direct_friend_handle: {
+          type: 'string',
+          description:
+            "Handle (no leading @) of the single friend, if this is a 1-on-1 hangout. MUST be in the Friends list in the system prompt. Mutually exclusive with group_id.",
         },
         title: {
           type: 'string',
@@ -159,7 +191,97 @@ const TOOLS = [
             "Reasonable values: 1:1 = 2; small dinner = group_size; party = group_size/2; minimum 1.",
         },
       },
-      required: ['group_id', 'title', 'proposed_start', 'reasoning'],
+      required: ['title', 'proposed_start', 'reasoning'],
+    },
+  },
+  {
+    name: 'find_mutual_slots',
+    description:
+      "Find time slots when participants are free. Use this BEFORE proposing or rescheduling a hangout involving anyone besides the user. Privacy-preserving — reveals only when busy/free, never event details. " +
+      "Two modes: " +
+      "1) STRICT (default, omit min_free_count): only returns slots when EVERY listed participant is free. Best for 1-on-1 and small groups. " +
+      "2) THRESHOLD (set min_free_count): returns slots where at least N participants are free. Use this when strict returned no slots, or for larger groups where everyone-free is unrealistic. The response tells you WHO is busy at each slot (busy_handles) so you can mention them honestly to the user. " +
+      "The user is always included automatically and must be free in every returned slot. " +
+      "Authorization: every participant must be friends with the user OR share a group with them.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        participant_handles: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            "Handles (no leading @) of the OTHER participants. Do NOT include the user themselves. Examples: ['ana'], ['marko','luka']. Use [] for a self-only check.",
+        },
+        duration_minutes: {
+          type: 'integer',
+          description: 'How long the slot needs to be, in minutes.',
+        },
+        earliest: {
+          type: 'string',
+          description:
+            "Earliest acceptable slot start, ISO 8601 in user's LOCAL time (no Z, no offset).",
+        },
+        latest: {
+          type: 'string',
+          description:
+            "Latest acceptable slot end, ISO 8601 in user's LOCAL time.",
+        },
+        time_preference: {
+          type: 'string',
+          enum: ['morning', 'afternoon', 'evening', 'any'],
+          description:
+            "Bias the ranking. 'morning'=7-11, 'afternoon'=12-16, 'evening'=17-21.",
+        },
+        min_free_count: {
+          type: 'integer',
+          description:
+            "Optional. When set, threshold mode: return slots where at least N participants are free (including the user). Examples: group of 5, set 4 to allow one person missing; group of 8, set 5 for majority. Omit for strict mode (everyone free).",
+        },
+      },
+      required: ['participant_handles', 'duration_minutes', 'earliest', 'latest'],
+    },
+  },
+  {
+    name: 'cancel_hangout',
+    description:
+      "Cancel an existing hangout. Use this when the user wants to call something off (\"cancel my dinner with Marko\", \"call off the climbing trip\", \"cancel that\"). Look up the hangout id from the Upcoming hangouts section in the system prompt. If ambiguous (multiple matches), ASK first — don't guess. For direct hangouts either party can cancel; for group hangouts only the proposer can.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        hangout_id: {
+          type: 'string',
+          description: 'UUID from the Upcoming hangouts list in the system prompt.',
+        },
+      },
+      required: ['hangout_id'],
+    },
+  },
+  {
+    name: 'update_hangout',
+    description:
+      "Reschedule or edit an existing hangout (move the time, change the title, change the venue). Only the proposer can update. If you change the TIME, all other participants' RSVPs reset to pending — they have to reconfirm. " +
+      "If the user asks to move a hangout, FIRST call find_mutual_slots for the new window, present the best option in chat with reasoning, wait for approval, THEN call update_hangout.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        hangout_id: {
+          type: 'string',
+          description: 'UUID from the Upcoming hangouts list.',
+        },
+        new_start: {
+          type: 'string',
+          description: "New start time, ISO 8601 in user's LOCAL time (no Z, no offset). Optional.",
+        },
+        new_end: {
+          type: 'string',
+          description: 'Optional new end time, ISO 8601 local.',
+        },
+        new_title: { type: 'string', description: 'Optional new title.' },
+        new_venue_name: { type: 'string', description: 'Optional new venue name.' },
+        new_venue_address: { type: 'string', description: 'Optional new venue address.' },
+        new_description: { type: 'string', description: 'Optional new description.' },
+      },
+      required: ['hangout_id'],
     },
   },
   {
@@ -240,8 +362,20 @@ function buildSystemPromptBlocks(input: {
   interests: InterestRow[];
   groups: GroupRow[];
   behavioralSummary: BehavioralSummaryRow | null;
+  friends: FriendRow[];
+  upcomingHangouts: UpcomingHangoutRow[];
 }): { staticBlock: string; dynamicBlock: string } {
-  const { firstName, socialOpenness, timezone, goals, interests, groups, behavioralSummary } = input;
+  const {
+    firstName,
+    socialOpenness,
+    timezone,
+    goals,
+    interests,
+    groups,
+    behavioralSummary,
+    friends,
+    upcomingHangouts,
+  } = input;
 
   const goalLines =
     goals.length === 0
@@ -272,6 +406,36 @@ function buildSystemPromptBlocks(input: {
           )
           .join('\n');
 
+  const friendLines =
+    friends.length === 0
+      ? 'No friends yet. They can add friends by handle.'
+      : friends
+          .map(
+            (f) =>
+              `  - @${f.handle ?? '?'}${f.first_name ? ` (${f.first_name})` : ''}`
+          )
+          .join('\n');
+
+  const upcomingLines =
+    upcomingHangouts.length === 0
+      ? 'No upcoming hangouts.'
+      : upcomingHangouts
+          .map((h) => {
+            const when = h.proposed_start
+              ? new Date(h.proposed_start).toLocaleString('en-US', {
+                  timeZone: timezone,
+                  weekday: 'short',
+                  month: 'short',
+                  day: 'numeric',
+                  hour: '2-digit',
+                  minute: '2-digit',
+                  hour12: false,
+                })
+              : '(no time)';
+            return `  - "${h.title}" · ${when} · with ${h.who_label} · ${h.status} · id: ${h.id} · kind: ${h.kind}`;
+          })
+          .join('\n');
+
   const staticBlock = `You are ALINE — ${firstName}'s personal AI agent.
 
 You help them coordinate their life and connect with the people who matter to them.
@@ -295,48 +459,111 @@ You learn from every conversation. You represent ${firstName} when their agent t
 
 # Tools you have
 
-- **propose_hangout** — Use this to actually create a hangout proposal in one
-  of ${firstName}'s groups. Only call it when ${firstName} explicitly wants to
-  plan something. After calling it, you'll get a tool_result confirming it
-  worked, then write your final reply.
+- **find_mutual_slots** — Find slots where everyone is free (the user plus
+  named friends, or all members of one of their groups). Privacy-preserving;
+  returns free/busy windows only, never event details. ALWAYS call this first
+  when you're planning anything that involves anyone other than the user.
 
-  When picking a time: prefer evenings (18:00-20:00 local) for casual hangs,
-  late afternoon for activities. Use ISO 8601 with the user's timezone offset.
-  Always provide concrete reasoning ("Thursday works best — most of the week
-  is open and Friday plans are hard to confirm last-minute").
+- **propose_hangout** — Create a hangout. Two modes:
+  - Group: pass \`group_id\` (one of ${firstName}'s group ids).
+  - 1-on-1: pass \`direct_friend_handle\` (a handle from Friends).
+  ONLY call this AFTER (1) find_mutual_slots confirms the time works, AND
+  (2) ${firstName} approves the proposal in chat ("yes", "sounds good"). The
+  hangout auto-confirms ${firstName}; others see it as pending. Always
+  include concrete reasoning the user will see.
 
-  When picking min_attendees: think about the activity. A casual coffee can
-  happen with 2 people. A party flops with 3. A movie night needs 3+. A study
-  session works with 2 if both want to study. If you're unsure, omit it — the
-  default is sensible (everyone for groups of 3-, half+1 for medium, half for
-  big groups). If ${firstName} hints at how many they want ("only if 5+ are
-  in"), use that number.
+- **cancel_hangout** — Cancel an existing hangout. Look up the id from the
+  Upcoming hangouts list. For direct: either party can cancel. For group:
+  only the proposer.
 
-  If you don't know which group, ASK ${firstName} which one before calling
-  the tool. Don't guess if there are multiple groups.
+- **update_hangout** — Reschedule or edit an existing hangout (only the
+  proposer can). If you're CHANGING THE TIME, you must call find_mutual_slots
+  first, present the new option in chat, and wait for approval — same flow
+  as propose_hangout.
 
-- **find_open_slots** — Read-only. Use this to figure out where things could
-  fit in ${firstName}'s calendar. Returns a ranked list. Each slot is
-  'none' (genuinely free), 'flexible' (a movable block sits there but can be
-  shuffled), or filtered out entirely if blocked by a fixed event. ALWAYS
-  call this before proposing calendar changes — never guess at availability.
+- **find_open_slots** — Read-only. Slot finder for ${firstName}'s OWN
+  calendar only. Returns 'none' / 'flexible' classification (the multi-user
+  find_mutual_slots is preferred for hangouts). Use this when ${firstName}
+  asks about THEIR availability for solo blocks (gym, study, reading).
 
-- **propose_change_set** — Use this to actually move things around or add
-  things to ${firstName}'s calendar. NEVER write to the calendar another
-  way. The user sees a card with Accept/Reject buttons; only after they tap
-  Accept does anything actually happen.
+- **propose_change_set** — Move things or add new blocks to ${firstName}'s
+  calendar. NEVER write to the calendar another way. User sees Accept/Reject
+  card. Compose changes atomically: if making dinner requires moving a gym
+  block, both go in the SAME change set. Summary_for_user is what the user
+  reads first — keep it conversational ("Move your Wed gym to Thu so dinner
+  with Marko fits Wed evening").
 
-  Compose change sets atomically: if making dinner with a friend requires
-  moving a gym block, both ops go in the SAME change set. Don't propose half
-  a plan. The summary_for_user is what the user reads first — make it
-  conversational and clear ("Move your Wed gym to Thu so dinner with Marko
-  fits Wed evening").
+  Bundling rule: when proposing a group hangout that also needs a calendar
+  block, call propose_hangout FIRST to get the hangout id, then include a
+  'create' op in the change set with the hangout_id linked.
 
-  Bundling rule: when the change includes hanging out with friends (a
-  group hangout), call propose_hangout FIRST to get the hangout id, then
-  include a 'create' op in the change set so the corresponding calendar
-  block also lands. The user accepts the calendar side; the friends still
-  see and confirm the hangout via their own apps.
+# Intent playbook — how to handle natural-language requests
+
+**Hard rule.** Before proposing or updating any time that involves anyone
+besides ${firstName}, you MUST call find_mutual_slots first. Never blind-
+propose. This is non-negotiable.
+
+**Two-step pattern for ALL hangout proposals and reschedules:**
+1. Call find_mutual_slots, then reply in chat with the best slot and your
+   reasoning ("4pm Wednesday works — you finish work at 3 and Ana's also free.
+   Want me to send it?"). DO NOT call propose_hangout or update_hangout yet.
+2. Wait for explicit approval ("yes", "looks good", "sure"). Only THEN call
+   the actual tool. If they push back ("not Wednesday", "later"), call
+   find_mutual_slots again with the adjusted constraints.
+
+**Threshold fallback for groups:**
+If strict find_mutual_slots (everyone free) returns zero slots for a group
+of 3+, call it AGAIN with min_free_count set to a sensible threshold:
+- For groups of 3-4: try min_free_count = total - 1 (one person allowed missing)
+- For groups of 5-7: try min_free_count = total - 2 (or majority floor)
+- For groups of 8+: try majority (ceil(total / 2) + 1)
+- If user mentioned a number ("only if 4+ are in"), use that
+
+When threshold mode returns slots, be honest in chat: "Thursday 7pm works
+for 4 of 5 — Marko's busy. Want to send it anyway? The hangout will confirm
+once enough people RSVP yes." This matches the hangout's existing
+min_attendees threshold — you propose to everyone, but it confirms when
+enough commit.
+
+NEVER propose a slot where the user themselves is busy. The RPC already
+filters those out, but if all slots have free_count < what user wants,
+suggest a different window instead.
+
+**About event titles you don't actually know:**
+find_mutual_slots returns ONLY busy time windows — it does NOT tell you
+what events are at those times. Don't invent titles ("the run", "lunch",
+"meeting") unless you SAW that title in chat history, the upcoming
+hangouts section, or the user just told you. If you only know they're
+busy but not WITH WHAT, say "you're booked then" or "you have something
+on" — never invent specifics.
+
+**Common intents:**
+
+- "Plan X with [name]" / "let's grab coffee with Ana":
+  Resolve [name] from Friends (match by handle or first_name). Use
+  find_mutual_slots(['handle']) → present option in chat → on approval call
+  propose_hangout with \`direct_friend_handle\`. If multiple friends match,
+  ask which one.
+
+- "Plan X with the [group]" / "dinner with the climbers":
+  Match group from Their groups. Use find_mutual_slots with that group's
+  member handles → present → on approval call propose_hangout with
+  \`group_id\`.
+
+- "Cancel my dinner with Marko" / "cancel that":
+  Find the matching hangout in Upcoming hangouts. For "that" or "it", use
+  the most recently mentioned one from the conversation. If ambiguous, ASK
+  ("you have dinner with Marko Wed AND Fri — which one?"). Then call
+  cancel_hangout.
+
+- "Move it to Friday 6pm" / "push the run by an hour":
+  Find the matching hangout. Call find_mutual_slots for the new window →
+  present in chat → on approval call update_hangout with the new time.
+
+- "I can't make it tonight" / "I have to skip":
+  If ${firstName} is the proposer, cancel the hangout. Otherwise this is a
+  decline of their own RSVP — currently they need to tap the in-app button
+  for that; tell them so. (Auto-respond on their behalf isn't wired up yet.)
 
 # Time + location context
 
@@ -362,8 +589,14 @@ ${goalLines}
 Known preferences:
 ${interestLines}
 
-Their groups (USE THE EXACT id WHEN CALLING propose_hangout):
+Their groups (USE THE EXACT id when calling propose_hangout with group_id):
 ${groupLines}
+
+Their friends (USE THE EXACT handle when calling propose_hangout with direct_friend_handle, or in find_mutual_slots participant_handles):
+${friendLines}
+
+Upcoming hangouts (next 5; USE THE EXACT id for cancel_hangout / update_hangout):
+${upcomingLines}
 
 # Output format (STRICT)
 
@@ -385,7 +618,31 @@ Do NOT re-extract things already in "Known preferences".
 </extracted>`;
 
   const now = new Date();
-  const dynamicBlock = `Now (UTC): ${now.toISOString()}`;
+  // Provide both UTC and the user's local time. Without this the agent
+  // reasons about "today" / "tomorrow" in UTC and gets dates wrong when the
+  // user is in a non-UTC timezone.
+  const localDateTime = now.toLocaleString('en-US', {
+    timeZone: timezone,
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+  const localDate = now.toLocaleDateString('en-US', {
+    timeZone: timezone,
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  });
+  const dynamicBlock =
+    `Now (UTC): ${now.toISOString()}\n` +
+    `Now (${timezone}): ${localDateTime}\n` +
+    `Today (in user's local time): ${localDate}\n` +
+    `When you say "today" or "tomorrow", reason from the user's LOCAL date above, not UTC.`;
 
   return { staticBlock, dynamicBlock };
 }
@@ -459,6 +716,7 @@ Deno.serve(async (req: Request) => {
   }
 
   // -------- load context in parallel --------
+  const nowIso = new Date().toISOString();
   const [
     profileRes,
     goalsRes,
@@ -467,6 +725,8 @@ Deno.serve(async (req: Request) => {
     chatRes,
     triggerMsgRes,
     summaryRes,
+    friendsRes,
+    upcomingHangoutsRes,
   ] = await Promise.all([
     supabase
       .from('profiles')
@@ -508,6 +768,32 @@ Deno.serve(async (req: Request) => {
       .select('archetype_text, data_quality')
       .eq('user_id', userId)
       .maybeSingle(),
+    // Friends: mutual friendships where current user appears on either side.
+    // Join to profiles twice (user_a and user_b) and resolve "the other user"
+    // in JS below.
+    supabase
+      .from('friendships')
+      .select(
+        'user_a, user_b, ' +
+          'profile_a:profiles!friendships_user_a_fkey(id, handle, first_name), ' +
+          'profile_b:profiles!friendships_user_b_fkey(id, handle, first_name)'
+      )
+      .eq('status', 'accepted')
+      .or(`user_a.eq.${userId},user_b.eq.${userId}`),
+    // Upcoming hangouts (group + direct), top 5 by proposed_start.
+    // RLS already scopes these to ones the user participates in.
+    supabase
+      .from('hangouts')
+      .select(
+        'id, title, proposed_start, status, group_id, direct_user_id, ' +
+          'groups(name), ' +
+          'direct_user:profiles!hangouts_direct_user_id_fkey(handle, first_name), ' +
+          'proposer:profiles!hangouts_proposed_by_fkey(id, handle, first_name)'
+      )
+      .in('status', ['proposing', 'confirmed'])
+      .gte('proposed_start', nowIso)
+      .order('proposed_start', { ascending: true })
+      .limit(5),
   ]);
 
   const profile: ProfileRow = (profileRes.data as ProfileRow | null) ?? {
@@ -527,6 +813,60 @@ Deno.serve(async (req: Request) => {
   const triggerMsg = triggerMsgRes.data as ChatRow | null;
   const behavioralSummary = (summaryRes.data as BehavioralSummaryRow | null) ?? null;
 
+  // Friends: pick "the other" profile from each friendship row.
+  type FriendshipJoinRow = {
+    user_a: string;
+    user_b: string;
+    profile_a: { id: string; handle: string | null; first_name: string | null } | null;
+    profile_b: { id: string; handle: string | null; first_name: string | null } | null;
+  };
+  const friends: FriendRow[] =
+    ((friendsRes.data as FriendshipJoinRow[] | null) ?? [])
+      .map((row) => (row.user_a === userId ? row.profile_b : row.profile_a))
+      .filter((p): p is { id: string; handle: string | null; first_name: string | null } => !!p)
+      .map((p) => ({ id: p.id, handle: p.handle, first_name: p.first_name }));
+
+  // Upcoming hangouts: flatten the joins into a friendly shape.
+  type UpcomingJoinRow = {
+    id: string;
+    title: string;
+    proposed_start: string | null;
+    status: string | null;
+    group_id: string | null;
+    direct_user_id: string | null;
+    groups: { name: string } | null;
+    direct_user: { handle: string | null; first_name: string | null } | null;
+    proposer: { id: string; handle: string | null; first_name: string | null } | null;
+  };
+  const upcomingHangouts: UpcomingHangoutRow[] =
+    ((upcomingHangoutsRes.data as UpcomingJoinRow[] | null) ?? []).map((h) => {
+      if (h.group_id) {
+        return {
+          id: h.id,
+          title: h.title,
+          proposed_start: h.proposed_start,
+          status: h.status,
+          who_label: h.groups?.name ?? 'group',
+          kind: 'group' as const,
+        };
+      }
+      // Direct hangout. For the current user, the "who" is the OTHER party.
+      // If proposer is me, show direct_user. If direct_user is me, show proposer.
+      const otherIsDirect = h.proposer?.id === userId;
+      const who =
+        (otherIsDirect ? h.direct_user?.handle : h.proposer?.handle) ??
+        (otherIsDirect ? h.direct_user?.first_name : h.proposer?.first_name) ??
+        'friend';
+      return {
+        id: h.id,
+        title: h.title,
+        proposed_start: h.proposed_start,
+        status: h.status,
+        who_label: `@${who}`,
+        kind: 'direct' as const,
+      };
+    });
+
   if (!triggerMsg || triggerMsg.role !== 'user') {
     return jsonRes({ error: 'Trigger message not found or not a user message' }, 404);
   }
@@ -539,6 +879,8 @@ Deno.serve(async (req: Request) => {
     interests,
     groups,
     behavioralSummary,
+    friends,
+    upcomingHangouts,
   });
 
   // Anthropic prompt caching: cache_control on the static block. The dynamic
@@ -628,7 +970,16 @@ Deno.serve(async (req: Request) => {
     const toolResults: ContentBlock[] = [];
     const userTz = profile.timezone ?? 'Europe/Ljubljana';
     for (const tu of toolUseBlocks) {
-      const result = await executeTool(supabase, userId, groups, userTz, tu.name, tu.input);
+      const result = await executeTool(
+        supabase,
+        userId,
+        groups,
+        friends,
+        upcomingHangouts,
+        userTz,
+        tu.name,
+        tu.input
+      );
       toolsExecuted.push({ name: tu.name, input: tu.input, result: result.message, ok: result.ok });
       toolResults.push({
         type: 'tool_result',
@@ -904,12 +1255,17 @@ async function executeTool(
   supabase: any,
   userId: string,
   userGroups: GroupRow[],
+  userFriends: FriendRow[],
+  upcomingHangouts: UpcomingHangoutRow[],
   userTimezone: string,
   name: string,
   input: Record<string, unknown>
 ): Promise<{ ok: boolean; message: string }> {
   if (name === 'propose_hangout') {
-    const groupId = String(input.group_id ?? '');
+    const groupId = input.group_id ? String(input.group_id) : '';
+    const directHandle = input.direct_friend_handle
+      ? String(input.direct_friend_handle).replace(/^@/, '').toLowerCase()
+      : '';
     const title = String(input.title ?? '').trim();
     const proposedStartRaw = String(input.proposed_start ?? '');
     const reasoning = String(input.reasoning ?? '').trim();
@@ -922,19 +1278,18 @@ async function executeTool(
         ? Math.max(1, Math.floor(input.min_attendees))
         : null;
 
-    if (!userGroups.some((g) => g.id === groupId)) {
+    // Exactly one of group_id / direct_friend_handle
+    if (!!groupId === !!directHandle) {
       return {
         ok: false,
-        message: `Group ${groupId} not found in user's groups. Ask the user which group they meant.`,
+        message:
+          'Provide exactly one of group_id (for group hangouts) or direct_friend_handle (for 1-on-1). Not both, not neither.',
       };
     }
     if (!title) return { ok: false, message: 'title is required' };
     if (!proposedStartRaw) return { ok: false, message: 'proposed_start is required' };
     if (!reasoning) return { ok: false, message: 'reasoning is required' };
 
-    // Normalize timestamps. If Claude gave a naive datetime (no offset), we
-    // interpret it as local time in the user's timezone — almost always what
-    // they meant by "tomorrow at 2pm".
     const proposedStart = normalizeIsoToUtc(proposedStartRaw, userTimezone);
     if (!proposedStart) {
       return {
@@ -946,6 +1301,43 @@ async function executeTool(
       ? normalizeIsoToUtc(proposedEndRaw, userTimezone)
       : null;
 
+    // -- Direct hangout path --
+    if (directHandle) {
+      const friend = userFriends.find(
+        (f) => (f.handle ?? '').toLowerCase() === directHandle
+      );
+      if (!friend) {
+        return {
+          ok: false,
+          message: `@${directHandle} is not in the user's friends list. Either ask the user to add them first, or check that you used the right handle.`,
+        };
+      }
+      const { data, error } = await supabase.rpc('propose_direct_hangout', {
+        _direct_user_id: friend.id,
+        _title: title,
+        _proposed_start: proposedStart,
+        _reasoning: reasoning,
+        _description: description,
+        _proposed_end: proposedEnd,
+        _venue_name: venueName,
+        _venue_address: venueAddress,
+      });
+      if (error) {
+        return { ok: false, message: `Failed to create direct hangout: ${error.message}` };
+      }
+      return {
+        ok: true,
+        message: `Direct hangout created (id: ${data}) with @${friend.handle ?? '?'}. You're auto-confirmed; they see it as pending until they respond.`,
+      };
+    }
+
+    // -- Group hangout path --
+    if (!userGroups.some((g) => g.id === groupId)) {
+      return {
+        ok: false,
+        message: `Group ${groupId} not found in user's groups. Ask the user which group they meant.`,
+      };
+    }
     const { data, error } = await supabase.rpc('propose_hangout', {
       _group_id: groupId,
       _title: title,
@@ -966,6 +1358,169 @@ async function executeTool(
     return {
       ok: true,
       message: `Hangout created (id: ${data}). Group "${groupName}" members notified. You're auto-confirmed; the hangout flips to CONFIRMED once enough members are in.`,
+    };
+  }
+
+  if (name === 'find_mutual_slots') {
+    const handlesRaw = Array.isArray(input.participant_handles)
+      ? input.participant_handles
+      : [];
+    const duration = Number(input.duration_minutes);
+    const earliestRaw = String(input.earliest ?? '');
+    const latestRaw = String(input.latest ?? '');
+    const timePref = String(input.time_preference ?? 'any') as TimePreference;
+    const minFreeCountRaw = input.min_free_count;
+    const minFreeCount =
+      typeof minFreeCountRaw === 'number' && Number.isFinite(minFreeCountRaw)
+        ? Math.max(1, Math.floor(minFreeCountRaw))
+        : null;
+
+    if (!Number.isFinite(duration) || duration <= 0) {
+      return { ok: false, message: 'duration_minutes must be a positive number' };
+    }
+    const earliest = normalizeIsoToUtc(earliestRaw, userTimezone);
+    const latest = normalizeIsoToUtc(latestRaw, userTimezone);
+    if (!earliest || !latest) {
+      return { ok: false, message: 'earliest/latest must be ISO 8601 datetimes' };
+    }
+
+    // Resolve handles → user_ids. Reject any unknown handles.
+    const userIds: string[] = [];
+    const unknown: string[] = [];
+    for (const raw of handlesRaw) {
+      const h = String(raw).replace(/^@/, '').toLowerCase().trim();
+      if (!h) continue;
+      const f = userFriends.find((fr) => (fr.handle ?? '').toLowerCase() === h);
+      if (f) {
+        userIds.push(f.id);
+      } else {
+        unknown.push(h);
+      }
+    }
+    if (unknown.length > 0) {
+      return {
+        ok: false,
+        message: `Unknown handle(s): ${unknown.map((h) => '@' + h).join(', ')}. Pick from the Friends list in the system prompt.`,
+      };
+    }
+
+    const { data, error } = await supabase.rpc('find_mutual_slots', {
+      _user_ids: userIds,
+      _earliest: earliest,
+      _latest: latest,
+      _duration_minutes: duration,
+      _time_preference: timePref,
+      _min_free_count: minFreeCount,
+    });
+    if (error) {
+      return { ok: false, message: `find_mutual_slots failed: ${error.message}` };
+    }
+
+    // Resolve busy_user_ids back to handles for the model. The agent thinks
+    // in handles, not uuids.
+    type SlotRow = {
+      start_at: string;
+      end_at: string;
+      score: number;
+      free_count: number;
+      total_count: number;
+      busy_user_ids: string[];
+    };
+    const rows = (data ?? []) as SlotRow[];
+    const idToHandle = new Map<string, string>(
+      userFriends.map((f) => [f.id, f.handle ?? '?'])
+    );
+    const enriched = rows.map((s) => ({
+      start_at: s.start_at,
+      end_at: s.end_at,
+      score: s.score,
+      free_count: s.free_count,
+      total_count: s.total_count,
+      busy_handles: (s.busy_user_ids ?? []).map((id) => idToHandle.get(id) ?? id),
+    }));
+
+    return {
+      ok: true,
+      message: JSON.stringify({
+        participant_count: userIds.length + 1,
+        mode: minFreeCount === null ? 'strict' : `threshold (min ${minFreeCount} free)`,
+        slots: enriched,
+      }),
+    };
+  }
+
+  if (name === 'cancel_hangout') {
+    const hangoutId = String(input.hangout_id ?? '').trim();
+    if (!hangoutId) return { ok: false, message: 'hangout_id is required' };
+
+    // Soft check: must be in upcoming list (the RPC will also enforce auth).
+    const known = upcomingHangouts.find((h) => h.id === hangoutId);
+    if (!known) {
+      return {
+        ok: false,
+        message: `hangout_id ${hangoutId} not in user's upcoming hangouts. Double-check the id.`,
+      };
+    }
+    const { error } = await supabase.rpc('cancel_hangout', { _hangout_id: hangoutId });
+    if (error) {
+      return { ok: false, message: `cancel_hangout failed: ${error.message}` };
+    }
+    return {
+      ok: true,
+      message: `Cancelled "${known.title}" (${known.who_label}). Other participants are notified via realtime sync.`,
+    };
+  }
+
+  if (name === 'update_hangout') {
+    const hangoutId = String(input.hangout_id ?? '').trim();
+    if (!hangoutId) return { ok: false, message: 'hangout_id is required' };
+
+    const known = upcomingHangouts.find((h) => h.id === hangoutId);
+    if (!known) {
+      return {
+        ok: false,
+        message: `hangout_id ${hangoutId} not in user's upcoming hangouts.`,
+      };
+    }
+
+    const newStartRaw = input.new_start ? String(input.new_start) : null;
+    const newEndRaw = input.new_end ? String(input.new_end) : null;
+    const newTitle = input.new_title ? String(input.new_title) : null;
+    const newVenueName = input.new_venue_name ? String(input.new_venue_name) : null;
+    const newVenueAddr = input.new_venue_address ? String(input.new_venue_address) : null;
+    const newDescription = input.new_description ? String(input.new_description) : null;
+
+    const newStart = newStartRaw ? normalizeIsoToUtc(newStartRaw, userTimezone) : null;
+    const newEnd = newEndRaw ? normalizeIsoToUtc(newEndRaw, userTimezone) : null;
+    if (newStartRaw && !newStart) {
+      return { ok: false, message: `new_start "${newStartRaw}" not parseable as ISO 8601` };
+    }
+    if (newEndRaw && !newEnd) {
+      return { ok: false, message: `new_end "${newEndRaw}" not parseable as ISO 8601` };
+    }
+
+    if (!newStart && !newEnd && !newTitle && !newVenueName && !newVenueAddr && !newDescription) {
+      return { ok: false, message: 'no fields to update — provide at least one' };
+    }
+
+    const { error } = await supabase.rpc('update_hangout', {
+      _hangout_id: hangoutId,
+      _new_start: newStart,
+      _new_end: newEnd,
+      _new_title: newTitle,
+      _new_venue_name: newVenueName,
+      _new_venue_addr: newVenueAddr,
+      _new_description: newDescription,
+    });
+    if (error) {
+      return { ok: false, message: `update_hangout failed: ${error.message}` };
+    }
+    const timeChanged = !!(newStart || newEnd);
+    return {
+      ok: true,
+      message: timeChanged
+        ? `Updated "${known.title}". Time changed → other participants' RSVPs were reset to pending; they need to reconfirm.`
+        : `Updated "${known.title}".`,
     };
   }
 
