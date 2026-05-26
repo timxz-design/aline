@@ -59,19 +59,60 @@ export type ClusterPlaceRow = {
 };
 
 /**
- * Walk through pings in time order, count entry-transitions per cluster.
+ * Walk pings in time order. For each cluster compute:
+ *   - visit count (number of entries — a new visit starts when the user
+ *     enters the cluster after being elsewhere or in noise)
+ *   - total dwell SECONDS = sum across visits of (last ping in visit −
+ *     first ping in visit). Single-ping visits contribute 0 dwell.
+ *
  * `clusterByPing[i]` holds the cluster index for ping `i`, or -1 for noise.
+ * `pingTimes[i]` is the ISO timestamp for ping `i` (ascending order assumed).
  */
-function countVisits(clusterByPing: number[], clusterCount: number): number[] {
-  const visitCounts = new Array<number>(clusterCount).fill(0);
-  let prev = -1;
-  for (const curr of clusterByPing) {
-    if (curr >= 0 && curr !== prev) {
-      visitCounts[curr]++;
+function countVisitsAndDwell(
+  clusterByPing: number[],
+  pingTimes: string[],
+  clusterCount: number,
+): { visits: number[]; dwellSeconds: number[] } {
+  const visits = new Array<number>(clusterCount).fill(0);
+  const dwellSeconds = new Array<number>(clusterCount).fill(0);
+
+  let openCluster = -1;       // cluster idx of the currently-open visit, or -1
+  let visitStartMs = 0;       // start time of currently-open visit
+  let lastInClusterMs = 0;    // time of most recent ping in the open cluster
+
+  const closeOpenVisit = () => {
+    if (openCluster >= 0) {
+      dwellSeconds[openCluster] += Math.max(0, (lastInClusterMs - visitStartMs) / 1000);
     }
-    prev = curr;
+    openCluster = -1;
+  };
+
+  for (let i = 0; i < clusterByPing.length; i++) {
+    const curr = clusterByPing[i];
+    const t = new Date(pingTimes[i]).getTime();
+
+    if (curr < 0) {
+      // Noise ping — closes any open visit.
+      closeOpenVisit();
+      continue;
+    }
+
+    if (curr !== openCluster) {
+      // Transition into a new (or different) cluster — close the previous
+      // open visit, start a new one, increment visit count.
+      closeOpenVisit();
+      openCluster = curr;
+      visitStartMs = t;
+      lastInClusterMs = t;
+      visits[curr]++;
+    } else {
+      // Continuing inside the same cluster — just extend the open visit.
+      lastInClusterMs = t;
+    }
   }
-  return visitCounts;
+  closeOpenVisit();
+
+  return { visits, dwellSeconds };
 }
 
 export async function recomputePlacesForCurrentUser(): Promise<{
@@ -132,7 +173,12 @@ export async function recomputePlacesForCurrentUser(): Promise<{
       clusterByPing[pingIdx] = ci;
     }
   }
-  const visitCounts = countVisits(clusterByPing, clusters.length);
+  const pingTimes = typedPings.map((p) => p.captured_at);
+  const { visits: visitCounts, dwellSeconds } = countVisitsAndDwell(
+    clusterByPing,
+    pingTimes,
+    clusters.length,
+  );
 
   // ---- 4. build candidate place rows + run inference -----------------------
   const candidates: ClusterPlaceRow[] = clusters.map((c, ci) => {
@@ -142,12 +188,15 @@ export async function recomputePlacesForCurrentUser(): Promise<{
     }));
     const memberTimes = memberPings.map((p) => p.captured_at).sort();
     const { lat, lon } = centroidOf(memberPoints);
+    const totalDwellMinutes = dwellSeconds[ci] / 60;
 
     const inference = inferPlaceLabel({
       pings: memberPings,
       google: null, // Google data, if any, comes via resolve-places afterwards
       first_seen: memberTimes[0],
       last_seen: memberTimes[memberTimes.length - 1],
+      total_dwell_minutes: totalDwellMinutes,
+      visits_count: visitCounts[ci] ?? 0,
     });
 
     return {
@@ -195,6 +244,14 @@ export async function recomputePlacesForCurrentUser(): Promise<{
         prior.inference_status === 'confirmed' ||
         prior.inference_status === 'corrected';
 
+      // The user has expressed an opinion only when they corrected the label
+      // OR set a user_label. A high-confidence auto-confirmed Google match
+      // is NOT a user opinion — we still want to be able to hide it as a
+      // drive-by when the dwell rule fires.
+      const userTouched =
+        prior.inference_status === 'corrected' ||
+        (prior as { user_label?: string | null }).user_label != null;
+
       const update: Record<string, unknown> = {
         visit_count: row.visitCount,
         ping_count: row.pingCount,
@@ -209,6 +266,13 @@ export async function recomputePlacesForCurrentUser(): Promise<{
         update.category = row.inferredCategory ?? prior.category;
         update.confidence = row.inferredConfidence;
         update.inference_status = statusFromConfidence(row.inferredConfidence);
+      }
+
+      // Backfill is_hidden whenever the user has NOT explicitly relabelled.
+      // This lets the new dwell-time rule retroactively hide drive-by places
+      // that got auto-confirmed via Google match in the past.
+      if (!userTouched) {
+        update.is_hidden = row.hideAsOuting;
       }
 
       const { error } = await supabase.from('places').update(update).eq('id', prior.id);

@@ -209,7 +209,7 @@ Deno.serve(async (req: Request) => {
 
   let q = supabase
     .from('places')
-    .select('id, geohash_7, google_place_id')
+    .select('id, geohash_7, google_place_id, name, category, inference_status, user_label')
     .eq('user_id', userId)
     .is('google_place_id', null);
   if (bodyIds && bodyIds.length > 0) q = q.in('id', bodyIds);
@@ -254,16 +254,28 @@ Deno.serve(async (req: Request) => {
       const category = categorize(primaryType);
       const sensitive = isSensitive(primaryType, hit.types ?? []);
 
+      // Preserve Home / Work labels from time-of-day inference, and any
+      // label the user has corrected. Google still gets to flag is_sensitive
+      // and we record the google_place_id so we don't re-query, but we don't
+      // clobber the meaningful label.
+      const isUserCorrected = p.inference_status === 'corrected' || p.user_label != null;
+      const isStrongTimeLabel = p.category === 'home' || p.category === 'work';
+      const preserveLabel = isUserCorrected || isStrongTimeLabel;
+
+      const updatePayload: Record<string, unknown> = {
+        google_place_id: hit.id,
+        is_sensitive: sensitive,
+        updated_at: new Date().toISOString(),
+      };
+      if (!preserveLabel) {
+        updatePayload.name = name;
+        updatePayload.primary_type = primaryType;
+        updatePayload.category = category;
+      }
+
       const { error: updErr } = await supabase
         .from('places')
-        .update({
-          google_place_id: hit.id,
-          name,
-          primary_type: primaryType,
-          category,
-          is_sensitive: sensitive,
-          updated_at: new Date().toISOString(),
-        })
+        .update(updatePayload)
         .eq('id', p.id);
 
       if (updErr) {

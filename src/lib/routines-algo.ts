@@ -7,10 +7,19 @@
 import { decodeGeohash, haversineMeters } from './clustering';
 
 export const ROUTINE_EPSILON_METERS = 100;
+/** Pattern must be present in at least this many distinct weeks. */
 export const ROUTINE_MIN_WEEKS = 2;
+/** Need at least this many same-time visits at the place. */
 export const ROUTINE_MIN_VISITS_PER_CLUSTER = 3;
 export const ROUTINE_TIME_CLUSTER_EPS_MIN = 60;
 export const ROUTINE_TIME_PADDING_MIN = 15;
+/**
+ * Minimum weeks-seen / total-weeks ratio to count as a real routine. Without
+ * this we surface "Wednesday at 5pm, 50% consistency" — half the time, not a
+ * routine. 0.6 = present in at least 60% of observed weeks. Keeps the UI
+ * honest while data accumulates.
+ */
+export const ROUTINE_MIN_CONSISTENCY = 0.6;
 
 export type RoutinePing = { captured_at: string; geohash_8: string };
 export type RoutinePlace = { id: string; geohash_7: string; category: string | null };
@@ -138,6 +147,12 @@ export function detectRoutines(
       const weeksSeen = new Set(members.map((m) => m.week));
       if (weeksSeen.size < ROUTINE_MIN_WEEKS) continue;
 
+      const consistency = weeksSeen.size / totalWeeks;
+      // Drop low-consistency patterns at the algo level — a "Wednesday 5pm
+      // at 40%" is two coincidences, not a routine. Lets pending routines
+      // accumulate confidence before they ever surface.
+      if (consistency < ROUTINE_MIN_CONSISTENCY) continue;
+
       const startMin = Math.max(0, clusterMin - ROUTINE_TIME_PADDING_MIN);
       const endMin = Math.min(1439, clusterMax + ROUTINE_TIME_PADDING_MIN);
       const lastObserved = members.map((m) => m.ping.captured_at).sort().pop()!;
@@ -148,7 +163,7 @@ export function detectRoutines(
         day_of_week: dow,
         start_minute: startMin,
         end_minute: endMin,
-        consistency: weeksSeen.size / totalWeeks,
+        consistency,
         last_observed: lastObserved,
         visit_count: members.length,
       });

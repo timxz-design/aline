@@ -89,7 +89,19 @@ export function BehavioralProfile() {
 
   const visiblePlaces = showHidden ? places : places.filter((p) => !p.is_hidden);
   const hiddenCount = places.length - places.filter((p) => !p.is_hidden).length;
-  const activeRoutines = routines.filter((r) => r.active);
+  // Only surface routines that look like real routines. A routine "active" in
+  // the DB but at 50% consistency is two coincidences — not something the
+  // user wants to see surfaced as a confident pattern. Two exceptions:
+  //   - user-confirmed routines (inference_status='confirmed') stay regardless
+  //   - if the user has any routine with consistency >= 0.65 we trust them
+  // Tuneable later; for now: hide anything < 65% unless explicitly confirmed.
+  const DISPLAY_MIN_CONSISTENCY = 0.65;
+  const activeRoutines = routines.filter(
+    (r) =>
+      r.active &&
+      (r.inference_status === 'confirmed' ||
+        (r.consistency ?? 0) >= DISPLAY_MIN_CONSISTENCY),
+  );
 
   if (places.length === 0 && routines.length === 0 && !summary?.archetype_text) {
     return (
@@ -104,19 +116,13 @@ export function BehavioralProfile() {
 
   return (
     <View style={{ gap: space.md }}>
-      {/* Archetype card */}
-      {summary?.archetype_text ? (
+      {/* Archetype card — sleep-derived inference is hidden until HealthKit
+          is integrated. GPS-only sleep inference is unreliable (iOS pauses
+          location when stationary, so "no pings" doesn't equal "asleep"). */}
+      {false && summary?.archetype_text ? (
         <View style={styles.archetypeCard}>
           <Text style={styles.archetypeLabel}>Archetype</Text>
           <Text style={styles.archetypeText}>{summary.archetype_text}</Text>
-          <View style={styles.archetypeMetaRow}>
-            <DataQualityBadge quality={summary.data_quality} />
-            {summary.waketime_minute != null && summary.bedtime_minute != null ? (
-              <Text style={styles.archetypeMetaText}>
-                Sleep window: {formatMinute(summary.waketime_minute)}–{formatMinute(summary.bedtime_minute)}
-              </Text>
-            ) : null}
-          </View>
         </View>
       ) : null}
 

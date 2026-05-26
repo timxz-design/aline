@@ -38,6 +38,20 @@ export type PlaceInferenceInput = {
   first_seen?: string | null;
   /** Most recent ping at this place (UTC ISO). */
   last_seen?: string | null;
+  /**
+   * Total minutes spent at this place, summed across visits.
+   * A "visit" is a contiguous run of pings in this cluster; dwell within a
+   * visit is `last - first` ping time. Single-ping visits = 0 dwell.
+   * Used to filter drive-bys: real places have ≥ min_dwell_minutes, drive-bys
+   * have a few seconds to a couple minutes.
+   * If omitted, falls back to the legacy span/distinct-days outing check only.
+   */
+  total_dwell_minutes?: number;
+  /**
+   * Number of separate visits (entry transitions) to this cluster. Used for
+   * the transit-detection heuristic: many short visits = bus stop, not place.
+   */
+  visits_count?: number;
 };
 
 export type PlaceInferenceResult = {
@@ -67,6 +81,23 @@ export const PLACE_INFERENCE_THRESHOLDS = {
   /** Outing detection: short span + few pings = ignore. */
   outing_max_span_days: 3,
   outing_max_distinct_days: 2,
+  /**
+   * Dwell-time gate: a cluster must accumulate at least this many minutes of
+   * actual presence (sum across visits) to count as a real place. Traffic
+   * lights, slow traffic, gas-pump stops produce <2 min of dwell. Coffee
+   * stops, brief meetings, gym sessions clear 10+ min easily.
+   * Independent of Google match — drive-by KFC stays hidden.
+   */
+  min_dwell_minutes: 10,
+  /**
+   * Transit detection: many quick stops at the same point suggests a bus
+   * stop / train station / taxi rank, NOT a place the user actually goes to.
+   * If avg pings/visit is very low AND visit count is high → flag as transit.
+   * Bus stop pattern: 30 visits × 1-2 pings each (a few minutes of dwell).
+   * Real place pattern: 5 visits × 10+ pings each (longer dwell).
+   */
+  transit_max_avg_pings_per_visit: 2,
+  transit_min_visits: 8,
   /** Confidence floors. */
   confirm_threshold: 0.85,
   pending_threshold: 0.4,
@@ -134,10 +165,23 @@ export function inferPlaceLabel(input: PlaceInferenceInput): PlaceInferenceResul
   // Outing check first — if it looks like a one-off trip, suppress it.
   const span = spanDays(input.first_seen, input.last_seen);
   const distinctDays = distinctLocalDays(pings);
-  const isOuting =
+
+  // Dwell gate: if the user never actually SPENT TIME here (sum of intra-visit
+  // dwell across all visits < min_dwell_minutes), it's a drive-by regardless
+  // of whether Google has a name for the cluster. This is the real defense
+  // against "every business along the road becomes a place."
+  // Only applied when caller supplied dwell data; otherwise fall back to
+  // legacy span/days heuristic alone.
+  const dwellProvided = typeof input.total_dwell_minutes === 'number';
+  const isTooShortDwell =
+    dwellProvided && (input.total_dwell_minutes ?? 0) < T.min_dwell_minutes;
+
+  const isShortTripNoGoogle =
     span <= T.outing_max_span_days &&
     distinctDays <= T.outing_max_distinct_days &&
-    !input.google; // a Google-matched place is real even if visited once
+    !input.google;
+
+  const isOuting = isTooShortDwell || isShortTripNoGoogle;
 
   // Helpers for time-of-day pattern analysis.
   const overnightCount = pings.filter((p) => isOvernight(hourOfDay(p.captured_at))).length;
@@ -149,7 +193,58 @@ export function inferPlaceLabel(input: PlaceInferenceInput): PlaceInferenceResul
   const businessRatio = ratio(businessCount, total);
   const weekdayCount = distinctWeekdays(pings);
 
-  // ---- 1. Google match dominates (when present) -------------------------
+  const isHomePattern =
+    overnightRatio >= T.home_overnight_ratio && distinctDays >= T.home_min_distinct_days;
+  const isWorkPattern =
+    businessRatio >= T.work_weekday_business_ratio && weekdayCount >= T.work_min_weekdays;
+
+  // ---- 1. STRONG time-of-day pattern wins outright -----------------------
+  // Home and Work patterns express what the user is ACTUALLY doing at the
+  // place. They override any Google match — if the data clearly says "this
+  // is where you sleep every night," it doesn't matter that there's a
+  // bakery next door, this cluster is Home.
+  if (isHomePattern) {
+    return {
+      name: 'Home',
+      category: 'home',
+      confidence: T.time_pattern_confidence,
+      label_source: 'time_of_day',
+      hide_as_outing: false,
+    };
+  }
+  if (isWorkPattern) {
+    return {
+      name: 'Work / school',
+      category: 'work',
+      confidence: T.time_pattern_confidence,
+      label_source: 'time_of_day',
+      hide_as_outing: false,
+    };
+  }
+
+  // ---- 2. Transit-stop heuristic ----------------------------------------
+  // Many short visits at the same point suggests a bus stop / train station /
+  // taxi pickup, NOT a place the user actually goes to. Flag as transit
+  // category with low confidence so the user can confirm.
+  // Also overrides Google match: a bus stop in front of Starbucks shouldn't
+  // be labelled Starbucks.
+  const visitsCount = input.visits_count ?? 0;
+  const avgPingsPerVisit = visitsCount > 0 ? total / visitsCount : Infinity;
+  const isTransitPattern =
+    visitsCount >= T.transit_min_visits &&
+    avgPingsPerVisit <= T.transit_max_avg_pings_per_visit;
+  if (isTransitPattern) {
+    return {
+      name: null, // user labels it ("Bus stop near my place", etc.)
+      category: 'transit',
+      confidence: T.weak_signal_confidence,
+      label_source: 'low_signal',
+      // Don't hide — user might want to confirm + label it.
+      hide_as_outing: false,
+    };
+  }
+
+  // ---- 3. Google match (when no clear time-of-day or transit pattern) ----
   if (input.google && (input.google.name || input.google.category)) {
     const name = input.google.name ?? null;
     const category = input.google.category ?? null;
@@ -162,9 +257,7 @@ export function inferPlaceLabel(input: PlaceInferenceInput): PlaceInferenceResul
     };
   }
 
-  // Below this point, no Google match. Fall back to time-of-day inference.
-
-  // Not enough data to make any call.
+  // ---- 4. Not enough data to make any call ------------------------------
   if (total < T.min_pings_for_inference) {
     return {
       name: null,
@@ -175,32 +268,7 @@ export function inferPlaceLabel(input: PlaceInferenceInput): PlaceInferenceResul
     };
   }
 
-  // ---- 2. Time-of-day inference ------------------------------------------
-  const isHomePattern =
-    overnightRatio >= T.home_overnight_ratio && distinctDays >= T.home_min_distinct_days;
-  if (isHomePattern) {
-    return {
-      name: 'Home',
-      category: 'home',
-      confidence: T.time_pattern_confidence,
-      label_source: 'time_of_day',
-      hide_as_outing: false,
-    };
-  }
-
-  const isWorkPattern =
-    businessRatio >= T.work_weekday_business_ratio && weekdayCount >= T.work_min_weekdays;
-  if (isWorkPattern) {
-    return {
-      name: 'Work / school',
-      category: 'work',
-      confidence: T.time_pattern_confidence,
-      label_source: 'time_of_day',
-      hide_as_outing: false,
-    };
-  }
-
-  // ---- 3. Weak signal — surface as "what is this?" ------------------------
+  // ---- 5. Weak signal — surface as "what is this?" -----------------------
   // We have enough pings to know it's a real place but no clear pattern.
   // Confidence below pending threshold means the curiosity card will ask
   // "What is this place?" rather than "I think this is X".
