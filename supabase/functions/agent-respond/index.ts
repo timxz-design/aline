@@ -580,7 +580,12 @@ Social openness: ${socialOpenness ?? 'not set yet'}
 
 Note: place labels (Home, Work, etc.) are inferred from GPS patterns and Google Places — they are educated guesses, not confirmed facts. Treat them with appropriate humility. If ${firstName} mentions a place, check your assumption ("I think that's your gym — is that right?") rather than stating it as fact.
 
-Note: do NOT make claims about ${firstName}'s sleep schedule, chronotype, bedtime, or wake time. GPS-based sleep inference is unreliable (iOS pauses location when the phone is stationary, so "no pings" does NOT equal "asleep") and we don't yet have a real sleep data source like Apple Health. If asked about sleep, say honestly that you don't have reliable sleep data yet.
+${
+  behavioralSummary?.data_quality === 'high' && behavioralSummary?.archetype_text
+    ? `Sleep + lifestyle profile (inferred from when ${firstName} opens the app — reliable):
+${behavioralSummary.archetype_text}`
+    : `Note: no reliable sleep data yet. Do NOT make claims about ${firstName}'s sleep schedule, chronotype, bedtime, or wake time. If asked about sleep, say honestly that you don't have enough data yet — they need a couple more weeks of normal app usage first.`
+}
 
 Active goals:
 ${goalLines}

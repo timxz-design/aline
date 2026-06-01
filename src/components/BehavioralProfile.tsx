@@ -116,13 +116,22 @@ export function BehavioralProfile() {
 
   return (
     <View style={{ gap: space.md }}>
-      {/* Archetype card — sleep-derived inference is hidden until HealthKit
-          is integrated. GPS-only sleep inference is unreliable (iOS pauses
-          location when stationary, so "no pings" doesn't equal "asleep"). */}
-      {false && summary?.archetype_text ? (
+      {/* Archetype card — gated by data_quality='high'. The sleep portion
+          comes from app_sessions (when the user opened ALINE) which is a
+          reliable proxy for "awake." We only surface it once we have ≥7
+          days of session data; before that, sleep stats would swing wildly. */}
+      {summary?.archetype_text && summary?.data_quality === 'high' ? (
         <View style={styles.archetypeCard}>
           <Text style={styles.archetypeLabel}>Archetype</Text>
           <Text style={styles.archetypeText}>{summary.archetype_text}</Text>
+          <View style={styles.archetypeMetaRow}>
+            <DataQualityBadge quality={summary.data_quality} />
+            {summary.waketime_minute != null && summary.bedtime_minute != null ? (
+              <Text style={styles.archetypeMetaText}>
+                Sleep window: {formatMinute(summary.waketime_minute)}–{formatMinute(summary.bedtime_minute)}
+              </Text>
+            ) : null}
+          </View>
         </View>
       ) : null}
 

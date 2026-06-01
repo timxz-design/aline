@@ -1,7 +1,8 @@
 import * as Notifications from 'expo-notifications';
 import { Redirect, Tabs, useRouter } from 'expo-router';
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { AppState, Text, View, type AppStateStatus } from 'react-native';
+import { logSessionClose, logSessionOpen, type SessionSource } from '../../src/lib/app-sessions';
 import { useAuth } from '../../src/lib/auth-context';
 import { maybeRecompute } from '../../src/lib/auto-recompute';
 import { startBackgroundGps, stopBackgroundGps } from '../../src/lib/backgroundGps';
@@ -54,15 +55,54 @@ export default function AppLayout() {
   // never blocks the UI. Triggered on:
   //   - first mount with a session (cold app open)
   //   - foreground transitions (user comes back to the app)
+  //
+  // Also logs app sessions: cold_start on initial mount, background_resume on
+  // foreground transitions, with a duration_seconds update on background.
+  // Powers wake/sleep inference and morning-ritual detection.
+  const sessionIdRef = useRef<string | null>(null);
+  const sessionStartMsRef = useRef<number>(0);
+  const notificationTapPendingRef = useRef<boolean>(false);
+
   useEffect(() => {
     if (!session) return;
+
+    // Cold start: insert the first session row. Default to cold_start; if a
+    // notification tap routing fires below we'll have already flipped the
+    // ref so the session is tagged accordingly.
+    const initialSource: SessionSource = notificationTapPendingRef.current
+      ? 'notification_tap'
+      : 'cold_start';
+    notificationTapPendingRef.current = false;
+    sessionStartMsRef.current = Date.now();
+    logSessionOpen(initialSource).then((id) => {
+      sessionIdRef.current = id;
+    });
 
     // Fire once now (throttle inside maybeRecompute will skip if too recent).
     maybeRecompute();
 
-    // Re-fire whenever the app comes to foreground.
+    // Re-fire whenever the app comes to foreground / log open + close.
     const sub = AppState.addEventListener('change', (next: AppStateStatus) => {
-      if (next === 'active') maybeRecompute();
+      if (next === 'active') {
+        const src: SessionSource = notificationTapPendingRef.current
+          ? 'notification_tap'
+          : 'background_resume';
+        notificationTapPendingRef.current = false;
+        sessionStartMsRef.current = Date.now();
+        logSessionOpen(src).then((id) => {
+          sessionIdRef.current = id;
+        });
+        maybeRecompute();
+      } else if (next === 'background' || next === 'inactive') {
+        const id = sessionIdRef.current;
+        const start = sessionStartMsRef.current;
+        if (id && start) {
+          const duration = (Date.now() - start) / 1000;
+          // Fire and forget — never block AppState transitions.
+          logSessionClose(id, duration);
+        }
+        sessionIdRef.current = null;
+      }
     });
     return () => sub.remove();
   }, [session?.user.id]);
@@ -73,9 +113,11 @@ export default function AppLayout() {
     registerForPushNotifications();
 
     // If the app was opened cold by tapping a notification, route to the
-    // relevant screen.
+    // relevant screen. Also tag the upcoming session as notification_tap so
+    // wake-time inference knows the source.
     Notifications.getLastNotificationResponseAsync().then((res) => {
       if (!res) return;
+      notificationTapPendingRef.current = true;
       const data = res.notification.request.content.data as
         | Record<string, unknown>
         | undefined;
@@ -86,6 +128,7 @@ export default function AppLayout() {
 
     // Live taps while app is running
     const sub = Notifications.addNotificationResponseReceivedListener((res) => {
+      notificationTapPendingRef.current = true;
       const data = res.notification.request.content.data as
         | Record<string, unknown>
         | undefined;

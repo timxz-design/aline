@@ -1,3 +1,4 @@
+import { useLocalSearchParams } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -36,8 +37,9 @@ import { colors, font, radius, space } from '../../src/theme';
 export default function AgentScreen() {
   const { user } = useAuth();
   const { profile } = useProfile();
+  const { seed } = useLocalSearchParams<{ seed?: string }>();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [draft, setDraft] = useState('');
+  const [draft, setDraft] = useState(typeof seed === 'string' ? seed : '');
   const [thinking, setThinking] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);

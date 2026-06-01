@@ -8,6 +8,7 @@ import {
 } from 'react-native';
 import { CalendarReconnectBanner } from '../../src/components/CalendarReconnectBanner';
 import { CuriosityCard } from '../../src/components/CuriosityCard';
+import { MorningPanel } from '../../src/components/MorningPanel';
 import { Screen } from '../../src/components/Screen';
 import { useAuth } from '../../src/lib/auth-context';
 import { useCuriosity } from '../../src/lib/use-curiosity';
@@ -230,6 +231,7 @@ export default function WeekScreen() {
         showsVerticalScrollIndicator={false}
       >
         <CalendarReconnectBanner />
+        <MorningPanel />
         {curiosityItem ? (
           <View style={{ paddingHorizontal: space.lg, paddingBottom: space.md }}>
             <CuriosityCard item={curiosityItem} onAnswered={refreshCuriosity} />

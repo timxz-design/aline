@@ -18,6 +18,38 @@ export type Database = {
   }
   public: {
     Tables: {
+      app_sessions: {
+        Row: {
+          duration_seconds: number | null
+          id: string
+          opened_at: string
+          source: string
+          user_id: string
+        }
+        Insert: {
+          duration_seconds?: number | null
+          id?: string
+          opened_at?: string
+          source?: string
+          user_id: string
+        }
+        Update: {
+          duration_seconds?: number | null
+          id?: string
+          opened_at?: string
+          source?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "app_sessions_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       behavioral_pings: {
         Row: {
           battery_level: number | null

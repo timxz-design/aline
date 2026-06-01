@@ -1,21 +1,20 @@
 /**
  * Behavioral summary algorithm — pure, no I/O.
  *
- *   pings + places + routines  →  one-row summary the agent can read directly
+ *   places + routines + sleep inference  →  one-row summary for the agent
  *
  * Outputs:
  *   - chronotype:        early_bird | night_owl | intermediate | null
- *   - waketime_minute:   avg minute-of-day of first ping each day  (proxy)
- *   - bedtime_minute:    avg minute-of-day of last ping each day   (proxy)
+ *   - waketime_minute:   median wake time across days (from app_sessions)
+ *   - bedtime_minute:    median bedtime across days   (from app_sessions)
  *   - weekly_workout_count: sum of `consistency` over gym-category routines
  *   - avg_daily_steps:   placeholder (filled by HealthKit/Fit in Step 5)
  *   - data_quality:      none | low | medium | high
  *   - archetype_text:    one-line description for the agent system prompt
  *
- * Note on bedtime/waketime: GPS alone can't distinguish "asleep" from "still
- * at home, awake". These minute values are best-effort proxies — the user
- * leaves home for the day at ~waketime, comes home for the night at ~bedtime.
- * Step 5 (HealthKit/Fit) replaces these with real sleep data.
+ * Sleep inference (waketime/bedtime/chronotype) comes from sleep-inference.ts
+ * which uses app_sessions — much more reliable than GPS gaps. We still
+ * compute place-based data_quality from clusters + days observed.
  */
 
 export type SummaryPing = { captured_at: string };
@@ -23,6 +22,15 @@ export type SummaryPlace = { category: string | null; visit_count: number };
 export type SummaryRoutine = {
   category: string | null;
   consistency: number;
+};
+
+/** Sleep inference result, slotted in from sleep-inference.ts. */
+export type SummarySleep = {
+  bedtime_minute: number | null;
+  waketime_minute: number | null;
+  chronotype: 'early_bird' | 'night_owl' | 'balanced' | null;
+  data_quality: 'low' | 'medium' | 'high';
+  days_observed: number;
 };
 
 export type BehavioralSummary = {
@@ -112,33 +120,36 @@ export function computeSummary(
   pings: SummaryPing[],
   places: SummaryPlace[],
   routines: SummaryRoutine[],
+  sleep: SummarySleep | null,
 ): BehavioralSummary {
-  // First and last ping minute-of-day, per local day.
-  const perDay = new Map<string, { first: number; last: number }>();
+  // Distinct days still derived from pings (drives data_quality alongside
+  // place count). Days observed via app sessions is a separate signal.
+  const perDay = new Set<string>();
   for (const p of pings) {
-    const day = localDayKey(p.captured_at);
-    const m = minuteOfDay(p.captured_at);
-    const cur = perDay.get(day);
-    if (!cur) perDay.set(day, { first: m, last: m });
-    else {
-      if (m < cur.first) cur.first = m;
-      if (m > cur.last)  cur.last  = m;
-    }
+    perDay.add(localDayKey(p.captured_at));
   }
-
   const distinctDays = perDay.size;
   const data_quality = computeDataQuality(distinctDays, places.length);
 
-  let waketime_minute: number | null = null;
-  let bedtime_minute: number | null = null;
-  if (distinctDays > 0) {
-    const firsts = Array.from(perDay.values()).map((v) => v.first);
-    const lasts  = Array.from(perDay.values()).map((v) => v.last);
-    waketime_minute = Math.round(average(firsts));
-    bedtime_minute  = Math.round(average(lasts));
-  }
+  // Sleep stats come from the new session-based inference. Map the new
+  // chronotype enum to the legacy one (balanced → intermediate) for
+  // backwards-compatible DB writes.
+  let waketime_minute: number | null = sleep?.waketime_minute ?? null;
+  let bedtime_minute: number | null = sleep?.bedtime_minute ?? null;
+  let chronotype: BehavioralSummary['chronotype'] = null;
+  if (sleep?.chronotype === 'early_bird') chronotype = 'early_bird';
+  else if (sleep?.chronotype === 'night_owl') chronotype = 'night_owl';
+  else if (sleep?.chronotype === 'balanced') chronotype = 'intermediate';
 
-  const chronotype = computeChronotype(waketime_minute, bedtime_minute);
+  // Only surface sleep stats if the session-based inference is "high"
+  // confidence (≥7 days of sessions). Otherwise clear them — better to show
+  // nothing than to show wrong numbers.
+  const sleepConfident = sleep?.data_quality === 'high';
+  if (!sleepConfident) {
+    waketime_minute = null;
+    bedtime_minute = null;
+    chronotype = null;
+  }
 
   // Weekly workout count: sum consistency across gym-category routines.
   // A 1.0-consistency Tue routine + 1.0-consistency Thu routine = 2 workouts/week.
