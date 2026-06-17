@@ -22,9 +22,13 @@
  */
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
+import {
+  createGoogleEvent,
+  getValidAccessToken,
+  patchGoogleEvent,
+} from '../_shared/google-auth.ts';
 
 const GOOGLE_OAUTH_CLIENT_ID = Deno.env.get('GOOGLE_OAUTH_CLIENT_ID');
-const GOOGLE_OAUTH_CLIENT_SECRET = Deno.env.get('GOOGLE_OAUTH_CLIENT_SECRET');
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -38,14 +42,6 @@ const CORS_HEADERS = {
 
 const WINDOW_BACK_DAYS = 7;
 const WINDOW_FORWARD_DAYS = 30;
-
-type StoredToken = {
-  user_id: string;
-  access_token: string;
-  refresh_token: string;
-  token_expires_at: string;
-  scope: string | null;
-};
 
 type GoogleEvent = {
   id: string;
@@ -81,51 +77,69 @@ Deno.serve(async (req: Request) => {
     auth: { persistSession: false },
   });
 
-  // Load tokens.
-  const { data: tokenRow, error: tokenErr } = await adminClient
-    .from('google_oauth_tokens')
-    .select('*')
-    .eq('user_id', user.id)
-    .maybeSingle();
-  if (tokenErr) {
-    return jsonRes({ error: 'Failed to load tokens', detail: tokenErr.message }, 500);
+  // Obtain a valid access token (refreshes + persists if expired).
+  const tokenRes = await getValidAccessToken(adminClient, user.id);
+  if (!tokenRes.ok) {
+    const status = tokenRes.code === 'no_connection' ? 400 : 502;
+    return jsonRes({ error: tokenRes.detail, code: tokenRes.code }, status);
   }
-  if (!tokenRow) {
-    return jsonRes(
-      { error: 'No Google Calendar connection. Connect first.' },
-      400
-    );
-  }
+  const accessToken = tokenRes.accessToken;
 
-  let token = tokenRow as StoredToken;
+  // -------- write-back: push ALINE-origin events to Google BEFORE the pull ----
+  // Inferred blocks (routine/transit) stay local — we never pollute the user's
+  // real calendar with guesses. Concrete ALINE events (fixed/goal/flexible/
+  // coordinated) get created or updated in Google. Round-trip duplication is
+  // prevented by keeping source='aline' and storing the Google id in
+  // external_id; the pull below SKIPS any Google event already claimed by an
+  // aline row.
+  try {
+    const pushMin = new Date(Date.now() - WINDOW_BACK_DAYS * 86400_000).toISOString();
+    const pushMax = new Date(Date.now() + WINDOW_FORWARD_DAYS * 86400_000).toISOString();
+    const { data: alineRows } = await adminClient
+      .from('calendar_events')
+      .select('id, external_id, title, description, start_at, end_at, location, updated_at, google_synced_at')
+      .eq('user_id', user.id)
+      .eq('source', 'aline')
+      .not('event_type', 'in', '(routine,transit)')
+      .gte('start_at', pushMin)
+      .lt('start_at', pushMax);
 
-  // Refresh if expired (or about to be).
-  const expiresAt = new Date(token.token_expires_at).getTime();
-  if (Date.now() >= expiresAt) {
-    const refreshed = await refreshAccessToken(token.refresh_token);
-    if (!refreshed.ok) {
-      await adminClient
-        .from('google_oauth_tokens')
-        .update({ last_sync_error: `Token refresh failed: ${refreshed.detail}` })
-        .eq('user_id', user.id);
-      return jsonRes(
-        { error: 'Token refresh failed', detail: refreshed.detail },
-        502
-      );
+    for (const row of alineRows ?? []) {
+      const input = {
+        title: row.title ?? '(untitled)',
+        start: row.start_at as string,
+        end: row.end_at as string,
+        description: (row.description as string | null) ?? null,
+        location: (row.location as string | null) ?? null,
+      };
+      if (!row.external_id) {
+        const created = await createGoogleEvent(accessToken, input);
+        if (created.ok) {
+          await adminClient
+            .from('calendar_events')
+            .update({ external_id: created.id, google_synced_at: new Date().toISOString() })
+            .eq('id', row.id);
+        }
+      } else {
+        // Re-PATCH only when the local row changed meaningfully after the last
+        // push. The 5s tolerance absorbs the updated_at trigger's own jitter so
+        // we don't re-PATCH (and re-email attendees) on every sync.
+        const updatedMs = row.updated_at ? new Date(row.updated_at as string).getTime() : 0;
+        const syncedMs = row.google_synced_at ? new Date(row.google_synced_at as string).getTime() : 0;
+        if (updatedMs - syncedMs > 5000) {
+          const patched = await patchGoogleEvent(accessToken, row.external_id as string, input);
+          if (patched.ok) {
+            await adminClient
+              .from('calendar_events')
+              .update({ google_synced_at: new Date().toISOString() })
+              .eq('id', row.id);
+          }
+        }
+      }
     }
-    const newExpires = new Date(Date.now() + (refreshed.expires_in - 30) * 1000);
-    await adminClient
-      .from('google_oauth_tokens')
-      .update({
-        access_token: refreshed.access_token,
-        token_expires_at: newExpires.toISOString(),
-      })
-      .eq('user_id', user.id);
-    token = {
-      ...token,
-      access_token: refreshed.access_token,
-      token_expires_at: newExpires.toISOString(),
-    };
+  } catch (e) {
+    // Push failures must never block the pull — log and continue.
+    console.warn('[gcal-sync] push step failed:', (e as Error).message);
   }
 
   // Fetch events.
@@ -147,7 +161,7 @@ Deno.serve(async (req: Request) => {
     if (pageToken) url.searchParams.set('pageToken', pageToken);
 
     const res = await fetch(url.toString(), {
-      headers: { Authorization: `Bearer ${token.access_token}` },
+      headers: { Authorization: `Bearer ${accessToken}` },
     });
     if (!res.ok) {
       const detail = await res.text();
@@ -170,9 +184,20 @@ Deno.serve(async (req: Request) => {
     if (pages > 8) break; // hard cap, ~2000 events
   } while (pageToken);
 
+  // Google ids already claimed by ALINE-origin rows — skip them on pull so an
+  // ALINE event we pushed doesn't get re-imported as a duplicate source='google'
+  // row (and never clobbers a local move/edit of an ALINE event).
+  const { data: claimedRows } = await adminClient
+    .from('calendar_events')
+    .select('external_id')
+    .eq('user_id', user.id)
+    .eq('source', 'aline')
+    .not('external_id', 'is', null);
+  const claimedIds = new Set((claimedRows ?? []).map((r) => r.external_id as string));
+
   // Transform & upsert.
   const rows = allEvents
-    .filter((e) => e.status !== 'cancelled' && e.start && e.end)
+    .filter((e) => e.status !== 'cancelled' && e.start && e.end && !claimedIds.has(e.id))
     .map((e) => {
       // dateTime: timed event (with timezone). date: all-day event.
       const startIso = e.start?.dateTime ?? naiveDateToIso(e.start?.date);
@@ -248,33 +273,6 @@ Deno.serve(async (req: Request) => {
     200
   );
 });
-
-async function refreshAccessToken(
-  refreshToken: string
-): Promise<
-  | { ok: true; access_token: string; expires_in: number }
-  | { ok: false; detail: string }
-> {
-  const refreshParams = new URLSearchParams({
-    client_id: GOOGLE_OAUTH_CLIENT_ID!,
-    refresh_token: refreshToken,
-    grant_type: 'refresh_token',
-  });
-  // iOS OAuth clients have no client secret — only include for Web clients.
-  if (GOOGLE_OAUTH_CLIENT_SECRET) {
-    refreshParams.set('client_secret', GOOGLE_OAUTH_CLIENT_SECRET);
-  }
-  const res = await fetch('https://oauth2.googleapis.com/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: refreshParams.toString(),
-  });
-  if (!res.ok) {
-    return { ok: false, detail: await res.text() };
-  }
-  const data = (await res.json()) as { access_token: string; expires_in: number };
-  return { ok: true, access_token: data.access_token, expires_in: data.expires_in };
-}
 
 /**
  * Convert "YYYY-MM-DD" (an all-day event date) to a midnight UTC ISO. Good

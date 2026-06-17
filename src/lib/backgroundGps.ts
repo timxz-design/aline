@@ -17,6 +17,7 @@
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as BackgroundTask from 'expo-background-task';
 import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
 import { Platform } from 'react-native';
@@ -24,6 +25,22 @@ import { encodeGeohash } from './clustering';
 import { supabase } from './supabase';
 
 export const BACKGROUND_LOCATION_TASK = 'aline-background-location';
+// Timer-based sampler: fires even when the user is STATIONARY (the movement
+// stream above never fires when still). This is what captures "at home doing a
+// workout / WFH" presence that the comparator needs.
+export const PERIODIC_LOCATION_TASK = 'aline-periodic-location';
+// Region monitoring: fires the moment you ENTER one of your significant places.
+// This is the highest-certainty presence signal we have — exact arrival at a
+// known place — and it's what resolves "unknown" live-status into truth.
+export const GEOFENCE_TASK = 'aline-geofencing';
+
+// iOS monitors at most 20 regions per app; keep headroom under that cap.
+const MAX_GEOFENCE_REGIONS = 18;
+const GEOFENCE_RADIUS_M = 120; // ~reliable lower bound for iOS region monitoring
+const GEOFENCE_SYNC_KEY = 'aline_geofence_region_ids'; // skip redundant re-syncs
+
+/** Origin of a behavioral ping — provenance for evidence weighting. */
+type PingSource = 'movement' | 'periodic' | 'foreground' | 'geofence';
 
 // Minimum time between uploaded pings, regardless of how often iOS fires the
 // task. iOS ignores the timeInterval option (Android-only) and fires on every
@@ -35,56 +52,183 @@ const LAST_PING_KEY = 'aline_last_ping_uploaded_ms';
 
 // ---------- task definition (must run at import time) -----------------------
 
+/**
+ * Shared ping recorder: throttle → resolve session → insert geohash-8 ping.
+ * Used by the movement stream, the periodic sampler, and the foreground sample.
+ * `force` skips the throttle (for explicit one-shot samples).
+ */
+async function recordPing(
+  lat: number,
+  lon: number,
+  capturedAtMs: number,
+  force = false,
+  source: PingSource = 'movement',
+  motionState: string = 'unknown',
+): Promise<void> {
+  try {
+    const now = Date.now();
+    if (!force) {
+      try {
+        const lastRaw = await AsyncStorage.getItem(LAST_PING_KEY);
+        const last = lastRaw ? parseInt(lastRaw, 10) : 0;
+        if (Number.isFinite(last) && now - last < MIN_UPLOAD_GAP_MS) return;
+      } catch { /* ignore */ }
+    }
+
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) return;
+
+    const { error: insertErr } = await supabase.from('behavioral_pings').insert([{
+      user_id: session.user.id,
+      captured_at: new Date(capturedAtMs).toISOString(),
+      geohash_8: encodeGeohash(lat, lon, 8),
+      motion_state: motionState,
+      battery_level: null as number | null,
+      source,
+    }]);
+    if (insertErr) {
+      console.warn('[ALINE GPS] Upload failed:', insertErr.message);
+      return;
+    }
+    try { await AsyncStorage.setItem(LAST_PING_KEY, String(now)); } catch { /* ignore */ }
+  } catch (e) {
+    console.warn('[ALINE GPS] recordPing exception:', e);
+  }
+}
+
+// Movement stream: fires when iOS delivers a location update (distance-based).
 TaskManager.defineTask(BACKGROUND_LOCATION_TASK, async ({ data, error }) => {
   if (error) {
     console.warn('[ALINE GPS] Task error:', error.message);
     return;
   }
-
   const { locations } = data as { locations: Location.LocationObject[] };
   if (!locations?.length) return;
+  const loc = locations[0];
+  await recordPing(loc.coords.latitude, loc.coords.longitude, loc.timestamp);
+});
 
+// Periodic timer task (expo-background-task / iOS BGTaskScheduler): fires on the
+// OS's schedule even when stationary. Grabs a one-shot fix so we capture presence
+// while the user is sitting still (home workout, WFH, etc.).
+TaskManager.defineTask(PERIODIC_LOCATION_TASK, async () => {
   try {
-    // Throttle: if we uploaded a ping within the last MIN_UPLOAD_GAP_MS, skip
-    // this whole batch. AsyncStorage survives JS context cold-starts so this
-    // works even when iOS unloads the task between wake-ups.
-    const now = Date.now();
-    try {
-      const lastRaw = await AsyncStorage.getItem(LAST_PING_KEY);
-      const last = lastRaw ? parseInt(lastRaw, 10) : 0;
-      if (Number.isFinite(last) && now - last < MIN_UPLOAD_GAP_MS) return;
-    } catch { /* ignore AsyncStorage errors and continue */ }
+    const { status } = await Location.getForegroundPermissionsAsync();
+    if (status !== 'granted') return BackgroundTask.BackgroundTaskResult.Success;
+    const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+    await recordPing(loc.coords.latitude, loc.coords.longitude, loc.timestamp, true, 'periodic');
+  } catch (e) {
+    console.warn('[ALINE GPS] Periodic task exception:', e);
+  }
+  return BackgroundTask.BackgroundTaskResult.Success;
+});
+
+// Region monitoring task: fires when the OS detects you crossing into one of
+// your monitored places. An ENTER is the strongest presence signal available —
+// certain arrival at a known place — so record a forced ping at the region
+// center, tagged stationary + geofence provenance, to resolve the comparator's
+// "unknown" status into truth. Enter-only for v1; exit/departure timing is
+// deferred to the travel-planning track.
+TaskManager.defineTask(GEOFENCE_TASK, async ({ data, error }) => {
+  if (error) {
+    console.warn('[ALINE GPS] Geofence task error:', error.message);
+    return;
+  }
+  const { eventType, region } = (data ?? {}) as {
+    eventType: Location.GeofencingEventType;
+    region: Location.LocationRegion;
+  };
+  if (eventType !== Location.GeofencingEventType.Enter) return;
+  if (region?.latitude == null || region?.longitude == null) return;
+  await recordPing(
+    region.latitude,
+    region.longitude,
+    Date.now(),
+    true,
+    'geofence',
+    'stationary',
+  );
+});
+
+/**
+ * One-shot location sample — call when the app comes to the foreground so we
+ * capture "where you are right now" immediately, without waiting on the OS timer.
+ */
+export async function foregroundSampleOnce(): Promise<void> {
+  try {
+    const { status } = await Location.getForegroundPermissionsAsync();
+    if (status !== 'granted') return;
+    const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+    await recordPing(loc.coords.latitude, loc.coords.longitude, loc.timestamp, true, 'foreground');
+  } catch (e) {
+    console.warn('[ALINE GPS] foregroundSampleOnce failed:', e);
+  }
+}
+
+/**
+ * Register region monitoring for the user's most-visited places (capped under
+ * the iOS 20-region limit). Skips hidden/sensitive places (privacy) and any
+ * without a centroid. Re-syncs only when the monitored set changes, so it's
+ * cheap to call on every foreground. Requires background ("Always") location
+ * permission — same grant the movement stream needs.
+ */
+export async function syncGeofences(): Promise<void> {
+  try {
+    const { status } = await Location.getBackgroundPermissionsAsync();
+    if (status !== 'granted') return;
 
     const { data: { session } } = await supabase.auth.getSession();
     if (!session) return;
 
-    // Only upload the FIRST location from the batch — multiple locations in
-    // one batch arrive close together; one ping per minute is enough.
-    const loc = locations[0];
-    const ping = {
-      user_id: session.user.id,
-      captured_at: new Date(loc.timestamp).toISOString(),
-      geohash_8: encodeGeohash(loc.coords.latitude, loc.coords.longitude, 8),
-      motion_state: 'unknown',
-      battery_level: null as number | null,
-    };
-
-    const { error: insertErr } = await supabase
-      .from('behavioral_pings')
-      .insert([ping]);
-
-    if (insertErr) {
-      console.warn('[ALINE GPS] Upload failed:', insertErr.message);
+    const { data: places, error } = await supabase
+      .from('places')
+      .select('id, centroid_lat, centroid_lon, visit_count')
+      .eq('user_id', session.user.id)
+      .eq('is_hidden', false)
+      .eq('is_sensitive', false)
+      .not('centroid_lat', 'is', null)
+      .not('centroid_lon', 'is', null)
+      .order('visit_count', { ascending: false })
+      .limit(MAX_GEOFENCE_REGIONS);
+    if (error) {
+      console.warn('[ALINE GPS] Geofence place query failed:', error.message);
       return;
     }
 
-    // Only stamp the throttle key after a successful upload, so a failed
-    // network attempt doesn't make us silent for the next minute.
-    try { await AsyncStorage.setItem(LAST_PING_KEY, String(now)); } catch { /* ignore */ }
+    const regions: Location.LocationRegion[] = (places ?? [])
+      .filter((p) => p.centroid_lat != null && p.centroid_lon != null)
+      .map((p) => ({
+        identifier: p.id as string,
+        latitude: p.centroid_lat as number,
+        longitude: p.centroid_lon as number,
+        radius: GEOFENCE_RADIUS_M,
+        notifyOnEnter: true,
+        notifyOnExit: false,
+      }));
+
+    const started = await Location.hasStartedGeofencingAsync(GEOFENCE_TASK);
+
+    if (regions.length === 0) {
+      if (started) await Location.stopGeofencingAsync(GEOFENCE_TASK);
+      try { await AsyncStorage.removeItem(GEOFENCE_SYNC_KEY); } catch { /* ignore */ }
+      return;
+    }
+
+    // Re-register only if the monitored set actually changed (startGeofencing
+    // replaces the whole set, so churning it on every foreground is wasteful).
+    const signature = regions.map((r) => r.identifier).sort().join(',');
+    try {
+      const prev = await AsyncStorage.getItem(GEOFENCE_SYNC_KEY);
+      if (started && prev === signature) return;
+    } catch { /* ignore */ }
+
+    await Location.startGeofencingAsync(GEOFENCE_TASK, regions);
+    try { await AsyncStorage.setItem(GEOFENCE_SYNC_KEY, signature); } catch { /* ignore */ }
+    console.log(`[ALINE GPS] Geofencing ${regions.length} place(s)`);
   } catch (e) {
-    console.warn('[ALINE GPS] Task exception:', e);
+    console.warn('[ALINE GPS] syncGeofences failed:', e);
   }
-});
+}
 
 // ---------- permission helpers ----------------------------------------------
 
@@ -130,7 +274,9 @@ function buildTaskOptions(): Location.LocationTaskOptions {
   };
 
   if (Platform.OS === 'ios') {
-    base.pausesUpdatesAutomatically = true;   // let iOS pause when stationary
+    // Don't let iOS fully pause when stationary — the periodic task is our
+    // stationary safety net, but keeping the stream alive helps too.
+    base.pausesUpdatesAutomatically = false;
     base.showsBackgroundLocationIndicator = true;
     base.activityType = Location.ActivityType.Other;
   }
@@ -151,6 +297,17 @@ export async function startBackgroundGps(): Promise<void> {
 
     await Location.startLocationUpdatesAsync(BACKGROUND_LOCATION_TASK, buildTaskOptions());
     console.log('[ALINE GPS] Background task started');
+
+    // Register the periodic stationary sampler (OS-scheduled, ~15 min best-effort).
+    try {
+      await BackgroundTask.registerTaskAsync(PERIODIC_LOCATION_TASK, { minimumInterval: 15 });
+      console.log('[ALINE GPS] Periodic sampler registered');
+    } catch (e) {
+      console.warn('[ALINE GPS] Periodic sampler registration failed:', e);
+    }
+
+    // Register region monitoring for the user's significant places. Best-effort.
+    await syncGeofences();
   } catch (e) {
     // Never crash the app over GPS setup failure
     console.warn('[ALINE GPS] startBackgroundGps failed:', e);
@@ -164,6 +321,13 @@ export async function stopBackgroundGps(): Promise<void> {
       await Location.stopLocationUpdatesAsync(BACKGROUND_LOCATION_TASK);
       console.log('[ALINE GPS] Background task stopped');
     }
+    try { await BackgroundTask.unregisterTaskAsync(PERIODIC_LOCATION_TASK); } catch { /* ignore */ }
+    try {
+      if (await Location.hasStartedGeofencingAsync(GEOFENCE_TASK)) {
+        await Location.stopGeofencingAsync(GEOFENCE_TASK);
+      }
+    } catch { /* ignore */ }
+    try { await AsyncStorage.removeItem(GEOFENCE_SYNC_KEY); } catch { /* ignore */ }
   } catch (e) {
     console.warn('[ALINE GPS] stopBackgroundGps failed:', e);
   }

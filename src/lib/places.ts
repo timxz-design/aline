@@ -257,6 +257,8 @@ export async function recomputePlacesForCurrentUser(): Promise<{
         ping_count: row.pingCount,
         last_seen: row.lastSeen,
         first_seen: prior.first_seen ?? row.firstSeen,
+        centroid_lat: row.centroidLat,
+        centroid_lon: row.centroidLon,
         updated_at: new Date().toISOString(),
       };
 
@@ -283,6 +285,8 @@ export async function recomputePlacesForCurrentUser(): Promise<{
         user_id: session.user.id,
         geohash_7: row.geohash7,
         geohash_5: row.geohash5,
+        centroid_lat: row.centroidLat,
+        centroid_lon: row.centroidLon,
         visit_count: row.visitCount,
         ping_count: row.pingCount,
         first_seen: row.firstSeen,

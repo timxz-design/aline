@@ -77,6 +77,42 @@ export default function ProfileScreen() {
     }, [loadFacts])
   );
 
+  const deletePreference = useCallback(
+    (text: string, ids: string[]) => {
+      Alert.alert('Forget this?', `ALINE will forget: "${text}"`, [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Forget',
+          style: 'destructive',
+          onPress: async () => {
+            const { error } = await supabase.from('interests').delete().in('id', ids);
+            if (error) Alert.alert('Failed', error.message);
+            else loadFacts();
+          },
+        },
+      ]);
+    },
+    [loadFacts],
+  );
+
+  const deleteGoal = useCallback(
+    (id: string, title: string) => {
+      Alert.alert('Delete goal?', `"${title}" will be removed.`, [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            const { error } = await supabase.from('goals').delete().eq('id', id);
+            if (error) Alert.alert('Failed', error.message);
+            else loadFacts();
+          },
+        },
+      ]);
+    },
+    [loadFacts],
+  );
+
   const startEditName = () => {
     setNameDraft(profile?.first_name ?? '');
     setEditingName(true);
@@ -262,30 +298,47 @@ export default function ProfileScreen() {
               <Text style={styles.emptyText}>None yet.</Text>
             ) : (
               goals.map((g) => (
-                <View key={g.id} style={styles.factRow}>
-                  <Text style={styles.factPrimary}>{g.title}</Text>
-                  <Text style={styles.factMeta}>
-                    {g.category ?? 'general'}
-                    {g.is_aspirational ? ' · aspirational' : ''} · {g.status}
-                  </Text>
+                <View key={g.id} style={[styles.factRow, styles.factRowWithAction]}>
+                  <View style={{ flex: 1, gap: 2 }}>
+                    <Text style={styles.factPrimary}>{g.title}</Text>
+                    <Text style={styles.factMeta}>
+                      {g.category ?? 'general'}
+                      {g.is_aspirational ? ' · aspirational' : ''} · {g.status}
+                    </Text>
+                  </View>
+                  <Pressable
+                    onPress={() => deleteGoal(g.id, g.title)}
+                    hitSlop={10}
+                    style={styles.deleteBtn}
+                  >
+                    <Text style={styles.deleteBtnText}>✕</Text>
+                  </Pressable>
                 </View>
               ))
             )}
           </Subsection>
 
-          <Subsection label={`Preferences (${interests.length})`}>
+          <Subsection label="Preferences">
             {interests.length === 0 ? (
               <Text style={styles.emptyText}>
                 {loading ? 'Loading…' : 'None yet.'}
               </Text>
             ) : (
-              interests.map((i) => (
-                <View key={i.id} style={styles.factRow}>
-                  <Text style={styles.factPrimary}>{formatInterest(i)}</Text>
-                  <Text style={styles.factMeta}>
-                    {i.key} · from {i.source ?? 'unknown'} ·{' '}
-                    {Math.round((i.confidence ?? 0) * 100)}% confidence
-                  </Text>
+              groupInterests(interests).map((group) => (
+                <View key={group.label} style={styles.prefGroup}>
+                  <Text style={styles.prefGroupLabel}>{group.label}</Text>
+                  <View style={styles.prefChipWrap}>
+                    {group.items.map((item, idx) => (
+                      <Pressable
+                        key={idx}
+                        onPress={() => deletePreference(item.text, item.ids)}
+                        style={({ pressed }) => [styles.prefChip, pressed && { opacity: 0.6 }]}
+                      >
+                        <Text style={styles.prefChipText}>{item.text}</Text>
+                        <Text style={styles.prefChipX}>✕</Text>
+                      </Pressable>
+                    ))}
+                  </View>
                 </View>
               ))
             )}
@@ -504,6 +557,42 @@ function Subsection({
   );
 }
 
+// Friendly section labels for the raw interest keys the agent extracts.
+const INTEREST_GROUPS: Record<string, string> = {
+  activity_like: 'Likes',
+  activity_dislike: 'Dislikes',
+  time_preference: 'Time preferences',
+  venue_preference: 'Places & venues',
+  social_preference: 'Social style',
+  group_preference: 'Groups',
+  goal_update: 'Goal notes',
+  mood: 'Recent moods',
+  life_event: 'Life events',
+  other: 'Other',
+};
+const GROUP_ORDER = Object.values(INTEREST_GROUPS);
+
+/** Group raw interests into human sections, prettified + deduped.
+ *  Each chip keeps the ids of ALL rows it represents so delete removes them all. */
+function groupInterests(
+  interests: Interest[],
+): { label: string; items: { text: string; ids: string[] }[] }[] {
+  const byLabel = new Map<string, Map<string, string[]>>();
+  for (const i of interests) {
+    const label = INTEREST_GROUPS[i.key] ?? 'Other';
+    const raw = formatInterest(i).trim();
+    if (!raw) continue;
+    const text = raw.charAt(0).toUpperCase() + raw.slice(1);
+    if (!byLabel.has(label)) byLabel.set(label, new Map());
+    const items = byLabel.get(label)!;
+    items.set(text, [...(items.get(text) ?? []), i.id]);
+  }
+  return GROUP_ORDER.filter((l) => byLabel.has(l)).map((label) => ({
+    label,
+    items: [...byLabel.get(label)!.entries()].map(([text, ids]) => ({ text, ids })),
+  }));
+}
+
 function formatInterest(i: Interest): string {
   // Best-effort prettify of the JSONB value.
   const v = i.value as unknown;
@@ -591,6 +680,46 @@ const styles = StyleSheet.create({
   },
   factPrimary: { color: colors.text, fontSize: 14, fontWeight: '600' },
   factMeta: { color: colors.textDim, fontSize: 11 },
+
+  prefGroup: { gap: 6 },
+  prefGroupLabel: {
+    color: colors.textMuted,
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+  },
+  prefChipWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  prefChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: colors.bgElevated,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.pill,
+    paddingHorizontal: space.md,
+    paddingVertical: 6,
+  },
+  prefChipText: { color: colors.text, fontSize: 13 },
+  prefChipX: { color: colors.textDim, fontSize: 11 },
+  factRowWithAction: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+  },
+  deleteBtn: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  deleteBtnText: { color: colors.textDim, fontSize: 13 },
 
   opennessOption: {
     flexDirection: 'row',

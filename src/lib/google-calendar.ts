@@ -15,14 +15,15 @@ export const GOOGLE_DISCOVERY: AuthSession.DiscoveryDocument = {
 };
 
 /**
- * Scopes we ask for. Read-only is enough — we only fetch events,
- * we never write to the user's Google Calendar.
+ * Scopes we ask for. `calendar.events` is read+write on events: we pull the
+ * user's events AND write ALINE-created blocks / send invites back to Google.
+ * (Still a "sensitive" scope — works for unverified test users via the warning
+ * screen.) Upgrading from the old read-only scopes forces a one-time re-consent.
  */
 export const GOOGLE_SCOPES = [
   'openid',
   'email',
-  'https://www.googleapis.com/auth/calendar.readonly',
-  'https://www.googleapis.com/auth/calendar.events.readonly',
+  'https://www.googleapis.com/auth/calendar.events',
 ];
 
 /**

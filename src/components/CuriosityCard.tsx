@@ -30,6 +30,7 @@ import {
   confirmCuriosityItem,
   correctPlaceLabel,
   rejectCuriosityItem,
+  resolveActivityCheck,
   snoozeCuriosityItem,
 } from '../lib/use-curiosity';
 import { colors, font, radius, space } from '../theme';
@@ -65,7 +66,19 @@ export function CuriosityCard({
 
   const onYes = async () => {
     setBusy(true);
-    const r = await confirmCuriosityItem(item.kind, item.id);
+    const r =
+      item.kind === 'activity'
+        ? await resolveActivityCheck(item.id, 'done')
+        : await confirmCuriosityItem(item.kind, item.id);
+    setBusy(false);
+    if (r.error) Alert.alert('Failed', r.error);
+    else onAnswered();
+  };
+
+  const onElsewhere = async () => {
+    if (item.kind !== 'activity') return;
+    setBusy(true);
+    const r = await resolveActivityCheck(item.id, 'elsewhere');
     setBusy(false);
     if (r.error) Alert.alert('Failed', r.error);
     else onAnswered();
@@ -88,7 +101,10 @@ export function CuriosityCard({
 
   const onReject = async () => {
     setBusy(true);
-    const r = await rejectCuriosityItem(item.kind, item.id);
+    const r =
+      item.kind === 'activity'
+        ? await resolveActivityCheck(item.id, 'skipped')
+        : await rejectCuriosityItem(item.kind, item.id);
     setBusy(false);
     if (r.error) Alert.alert('Failed', r.error);
     else onAnswered();
@@ -164,6 +180,15 @@ export function CuriosityCard({
               <Text style={styles.btnGhostText}>Actually…</Text>
             </Pressable>
           ) : null}
+          {item.kind === 'activity' && question.middleLabel ? (
+            <Pressable
+              onPress={onElsewhere}
+              disabled={busy}
+              style={[styles.btn, styles.btnGhost]}
+            >
+              <Text style={styles.btnGhostText}>{question.middleLabel}</Text>
+            </Pressable>
+          ) : null}
           <Pressable
             onPress={onReject}
             disabled={busy}
@@ -186,7 +211,38 @@ function buildQuestion(item: CuriosityItem): {
   subtitle: string | null;
   yesLabel: string;
   rejectLabel: string;
+  middleLabel?: string;
 } {
+  if (item.kind === 'activity') {
+    const a = item.payload;
+    const when = relTime(a.scheduled_start);
+    if (a.ambiguity === 'home') {
+      return {
+        text: `Did you do your ${a.label} at home ${when}?`,
+        subtitle: `I couldn't tell from your location.`,
+        yesLabel: 'Yes, did it',
+        middleLabel: 'Elsewhere',
+        rejectLabel: 'Skipped',
+      };
+    }
+    if (a.ambiguity === 'goal') {
+      return {
+        text: `Did you do ${a.label} ${when}?`,
+        subtitle: null,
+        yesLabel: 'Yes',
+        rejectLabel: 'Skipped',
+      };
+    }
+    // 'skipped' — looked like they weren't at the expected place
+    return {
+      text: `Looks like you skipped ${a.label} ${when}.`,
+      subtitle: `Did you do it, somewhere else, or skip?`,
+      yesLabel: 'Did it',
+      middleLabel: 'Elsewhere',
+      rejectLabel: 'Skipped',
+    };
+  }
+
   if (item.kind === 'place') {
     const p = item.payload;
     const niceName = p.user_label ?? p.name;

@@ -5,7 +5,7 @@ import { AppState, Text, View, type AppStateStatus } from 'react-native';
 import { logSessionClose, logSessionOpen, type SessionSource } from '../../src/lib/app-sessions';
 import { useAuth } from '../../src/lib/auth-context';
 import { maybeRecompute } from '../../src/lib/auto-recompute';
-import { startBackgroundGps, stopBackgroundGps } from '../../src/lib/backgroundGps';
+import { foregroundSampleOnce, startBackgroundGps, stopBackgroundGps, syncGeofences } from '../../src/lib/backgroundGps';
 import {
   registerForPushNotifications,
   routeForNotification,
@@ -80,6 +80,11 @@ export default function AppLayout() {
 
     // Fire once now (throttle inside maybeRecompute will skip if too recent).
     maybeRecompute();
+    // Cold-launch location sample. The AppState 'active' handler below only
+    // fires on foreground *resume*, so without this a cold open never captured
+    // "where you are right now". No-ops silently if permission isn't granted
+    // yet (e.g. first-ever launch); the resume handler picks it up after.
+    foregroundSampleOnce();
 
     // Re-fire whenever the app comes to foreground / log open + close.
     const sub = AppState.addEventListener('change', (next: AppStateStatus) => {
@@ -93,6 +98,9 @@ export default function AppLayout() {
           sessionIdRef.current = id;
         });
         maybeRecompute();
+        foregroundSampleOnce(); // capture current location on app open
+        syncGeofences(); // refresh monitored places (clustering may have changed them)
+
       } else if (next === 'background' || next === 'inactive') {
         const id = sessionIdRef.current;
         const start = sessionStartMsRef.current;
@@ -147,6 +155,7 @@ export default function AppLayout() {
 
   return (
     <Tabs
+      initialRouteName="agent"
       screenOptions={{
         headerShown: false,
         tabBarActiveTintColor: colors.accent,
@@ -167,6 +176,13 @@ export default function AppLayout() {
       }}
     >
       <Tabs.Screen
+        name="agent"
+        options={{
+          title: 'Agent',
+          tabBarIcon: ({ focused }) => <TabIcon symbol="✦" focused={focused} />,
+        }}
+      />
+      <Tabs.Screen
         name="week"
         options={{
           title: 'My Week',
@@ -178,13 +194,6 @@ export default function AppLayout() {
         options={{
           title: 'Groups',
           tabBarIcon: ({ focused }) => <TabIcon symbol="◉" focused={focused} />,
-        }}
-      />
-      <Tabs.Screen
-        name="agent"
-        options={{
-          title: 'Agent',
-          tabBarIcon: ({ focused }) => <TabIcon symbol="✦" focused={focused} />,
         }}
       />
       <Tabs.Screen

@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Alert,
+  Linking,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -8,7 +10,6 @@ import {
 } from 'react-native';
 import { CalendarReconnectBanner } from '../../src/components/CalendarReconnectBanner';
 import { CuriosityCard } from '../../src/components/CuriosityCard';
-import { MorningPanel } from '../../src/components/MorningPanel';
 import { Screen } from '../../src/components/Screen';
 import { useAuth } from '../../src/lib/auth-context';
 import { useCuriosity } from '../../src/lib/use-curiosity';
@@ -35,6 +36,8 @@ const EVENT_COLORS: Record<string, string> = {
   flexible: colors.eventFlexible,
   goal: colors.eventGoal,
   coordinated: colors.eventCoordinated,
+  routine: colors.accent2,
+  transit: colors.textMuted,
 };
 
 export default function WeekScreen() {
@@ -79,6 +82,35 @@ export default function WeekScreen() {
     loadEvents();
   }, [loadEvents]);
 
+  // Upcoming confirmed hangouts (direct + group) — sourced from the
+  // coordinated calendar_events the hangout-sync triggers create. Spans the
+  // near future, independent of the visible week, so a hangout two weeks out
+  // is still visible here. This is the dedicated "where am I meeting people"
+  // surface that the day grid alone doesn't give.
+  const [upcoming, setUpcoming] = useState<CalendarEvent[]>([]);
+  const loadUpcoming = useCallback(async () => {
+    if (!user) return;
+    const horizon = addDays(new Date(), 30);
+    const { data, error } = await supabase
+      .from('calendar_events')
+      .select('*')
+      .eq('user_id', user.id)
+      .eq('event_type', 'coordinated')
+      .gte('start_at', new Date().toISOString())
+      .lt('start_at', horizon.toISOString())
+      .order('start_at', { ascending: true })
+      .limit(6);
+    if (error) {
+      console.warn('Failed to load upcoming hangouts:', error.message);
+      return;
+    }
+    setUpcoming(data ?? []);
+  }, [user]);
+
+  useEffect(() => {
+    loadUpcoming();
+  }, [loadUpcoming]);
+
   /**
    * Refresh button: if the user has Google connected, run a sync first
    * (which writes new/changed events into calendar_events), then reload.
@@ -91,11 +123,11 @@ export default function WeekScreen() {
       if (status.connected) {
         await syncGoogleCalendar();
       }
-      await loadEvents();
+      await Promise.all([loadEvents(), loadUpcoming()]);
     } finally {
       setSyncing(false);
     }
-  }, [loadEvents]);
+  }, [loadEvents, loadUpcoming]);
 
   const eventsForSelectedDay = useMemo(
     () => events.filter((ev) => sameDay(new Date(ev.start_at), selectedDate)),
@@ -224,6 +256,8 @@ export default function WeekScreen() {
         <Legend color={colors.eventFlexible} label="Flexible" />
         <Legend color={colors.eventGoal} label="Goal" />
         <Legend color={colors.eventCoordinated} label="Coordinated" />
+        <Legend color={colors.accent2} label="Routine" />
+        <Legend color={colors.textMuted} label="Transit" />
       </View>
 
       <ScrollView
@@ -231,7 +265,14 @@ export default function WeekScreen() {
         showsVerticalScrollIndicator={false}
       >
         <CalendarReconnectBanner />
-        <MorningPanel />
+        {upcoming.length > 0 ? (
+          <View style={styles.upcomingSection}>
+            <Text style={styles.upcomingHeader}>Upcoming hangouts</Text>
+            {upcoming.map((h) => (
+              <UpcomingHangout key={h.id} event={h} />
+            ))}
+          </View>
+        ) : null}
         {curiosityItem ? (
           <View style={{ paddingHorizontal: space.lg, paddingBottom: space.md }}>
             <CuriosityCard item={curiosityItem} onAnswered={refreshCuriosity} />
@@ -246,9 +287,32 @@ export default function WeekScreen() {
               <View style={styles.hourLine} />
             </View>
           ))}
-          {eventsForSelectedDay.map((ev) => (
-            <EventBlock key={ev.id} event={ev} />
-          ))}
+          {eventsForSelectedDay.map((ev, i) => {
+            // Overlap lane: count earlier events still running when this one
+            // starts, and indent so every block stays visible/tappable.
+            // (Overlap is a "something's off" signal — don't hide it.)
+            let depth = 0;
+            for (let j = 0; j < i; j++) {
+              const prev = eventsForSelectedDay[j];
+              if (
+                new Date(prev.end_at) > new Date(ev.start_at) &&
+                new Date(prev.start_at) < new Date(ev.end_at)
+              ) {
+                depth++;
+              }
+            }
+            return (
+              <EventBlock
+                key={ev.id}
+                event={ev}
+                indent={Math.min(depth, 3)}
+                onChange={() => {
+                  loadEvents();
+                  loadUpcoming();
+                }}
+              />
+            );
+          })}
           {sameDay(selectedDate, now) ? (
             <CurrentTimeLine now={now} />
           ) : null}
@@ -281,6 +345,42 @@ function CurrentTimeLine({ now }: { now: Date }) {
   );
 }
 
+function UpcomingHangout({ event }: { event: CalendarEvent }) {
+  const when = new Date(event.start_at).toLocaleString(undefined, {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+  const openDirections = () => {
+    if (!event.location) return;
+    const url = `https://maps.google.com/?q=${encodeURIComponent(event.location)}`;
+    Linking.openURL(url).catch(() => {});
+  };
+  return (
+    <View style={styles.upcomingCard}>
+      <View style={[styles.upcomingDot, { backgroundColor: colors.eventCoordinated }]} />
+      <View style={{ flex: 1 }}>
+        <Text style={styles.upcomingTitle} numberOfLines={1}>
+          {event.title || 'Hangout'}
+        </Text>
+        <Text style={styles.upcomingWhen}>{when}</Text>
+        {event.location ? (
+          <Pressable onPress={openDirections} hitSlop={6}>
+            <Text style={styles.upcomingVenue} numberOfLines={1}>
+              📍 {event.location} · Directions
+            </Text>
+          </Pressable>
+        ) : (
+          <Text style={styles.upcomingNoVenue}>No place set yet</Text>
+        )}
+      </View>
+    </View>
+  );
+}
+
 function Legend({ color, label }: { color: string; label: string }) {
   return (
     <View style={styles.legendItem}>
@@ -290,7 +390,15 @@ function Legend({ color, label }: { color: string; label: string }) {
   );
 }
 
-function EventBlock({ event }: { event: CalendarEvent }) {
+function EventBlock({
+  event,
+  onChange,
+  indent = 0,
+}: {
+  event: CalendarEvent;
+  onChange: () => void;
+  indent?: number;
+}) {
   const start = new Date(event.start_at);
   const end = new Date(event.end_at);
   const startMin = start.getHours() * 60 + start.getMinutes();
@@ -300,19 +408,52 @@ function EventBlock({ event }: { event: CalendarEvent }) {
   const height = Math.max(((endMin - startMin) / 60) * HOUR_HEIGHT, 28);
   const accent = EVENT_COLORS[event.event_type ?? 'fixed'] ?? colors.eventFixed;
   const wasMoved = !!event.original_start_at;
+  const isRoutine = event.event_type === 'routine';
 
-  return (
-    <View
-      style={[
-        styles.eventBlock,
-        { top, height, borderLeftColor: accent, backgroundColor: tint(accent) },
-      ]}
-    >
+  // Routine blocks are inferred — let the user confirm or hide them.
+  const onRoutinePress = () => {
+    const routineId = event.external_id?.split(':')[0];
+    if (!routineId) return;
+    Alert.alert(
+      event.title || 'Routine',
+      "ALINE inferred this from your patterns. Keep it or hide it?",
+      [
+        {
+          text: 'Confirm',
+          onPress: async () => {
+            await supabase
+              .from('routines')
+              .update({ inference_status: 'confirmed', active: true })
+              .eq('id', routineId);
+            onChange();
+          },
+        },
+        {
+          text: 'Hide',
+          style: 'destructive',
+          onPress: async () => {
+            await supabase.from('routines').update({ active: false }).eq('id', routineId);
+            await supabase
+              .from('calendar_events')
+              .delete()
+              .eq('source', 'routine')
+              .like('external_id', `${routineId}:%`);
+            onChange();
+          },
+        },
+        { text: 'Cancel', style: 'cancel' },
+      ],
+    );
+  };
+
+  const body = (
+    <>
       <View style={styles.eventTitleRow}>
         <Text style={styles.eventTitle} numberOfLines={1}>
           {event.title || 'Untitled'}
         </Text>
         {wasMoved ? <Text style={styles.movedBadge}>↔ moved</Text> : null}
+        {isRoutine ? <Text style={styles.movedBadge}>inferred</Text> : null}
       </View>
       <Text style={styles.eventTime}>
         {formatHM(start)} – {formatHM(end)}
@@ -320,8 +461,31 @@ function EventBlock({ event }: { event: CalendarEvent }) {
           ? ` · was ${formatHM(new Date(event.original_start_at))}`
           : ''}
       </Text>
-    </View>
+    </>
   );
+
+  const blockStyle = [
+    styles.eventBlock,
+    { top, height, borderLeftColor: accent, backgroundColor: tint(accent) },
+    isRoutine && styles.eventBlockInferred,
+    indent > 0 && {
+      left: space.lg + 56 + indent * 16,
+      zIndex: indent,
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderLeftWidth: 3,
+      borderLeftColor: accent,
+    },
+  ];
+
+  if (isRoutine) {
+    return (
+      <Pressable onPress={onRoutinePress} style={blockStyle}>
+        {body}
+      </Pressable>
+    );
+  }
+  return <View style={blockStyle}>{body}</View>;
 }
 
 function tint(hex: string): string {
@@ -423,9 +587,11 @@ const styles = StyleSheet.create({
   dayDateToday: { color: colors.accent2 },
   legend: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     paddingHorizontal: space.lg,
-    paddingVertical: space.md,
-    gap: space.lg,
+    paddingVertical: space.sm,
+    columnGap: space.md,
+    rowGap: 4,
   },
   legendItem: {
     flexDirection: 'row',
@@ -435,6 +601,54 @@ const styles = StyleSheet.create({
   legendDot: { width: 8, height: 8, borderRadius: 4 },
   legendText: { color: colors.textMuted, fontSize: 11 },
   scrollBody: { paddingBottom: space.xxxl },
+  upcomingSection: {
+    paddingHorizontal: space.lg,
+    paddingBottom: space.md,
+    gap: space.xs,
+  },
+  upcomingHeader: {
+    color: colors.textMuted,
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+    marginBottom: space.xs,
+  },
+  upcomingCard: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: space.sm,
+    backgroundColor: colors.bgRaised,
+    borderRadius: radius.md,
+    padding: space.md,
+  },
+  upcomingDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginTop: 5,
+  },
+  upcomingTitle: {
+    color: colors.text,
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  upcomingWhen: {
+    color: colors.textMuted,
+    fontSize: 12,
+    marginTop: 1,
+  },
+  upcomingVenue: {
+    color: colors.accent,
+    fontSize: 12,
+    marginTop: 3,
+  },
+  upcomingNoVenue: {
+    color: colors.textMuted,
+    fontSize: 12,
+    fontStyle: 'italic',
+    marginTop: 3,
+  },
   timeline: {
     paddingHorizontal: space.lg,
     position: 'relative',
@@ -465,6 +679,12 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     borderLeftWidth: 3,
     justifyContent: 'center',
+  },
+  // NOTE: borderStyle:'dashed' + a single-side border renders NO border on iOS
+  // (RN quirk) — routine blocks lost their color bar entirely. Solid bar +
+  // opacity + the "inferred" badge carry the tentative look instead.
+  eventBlockInferred: {
+    opacity: 0.75,
   },
   eventTitleRow: {
     flexDirection: 'row',

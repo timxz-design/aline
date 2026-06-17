@@ -233,8 +233,8 @@ export function GoogleCalendarConnect() {
       ) : (
         <>
           <Text style={styles.subtle}>
-            Let your agent see your real schedule. ALINE only reads — never
-            writes — your Google Calendar.
+            Let your agent see your real schedule, add the blocks it plans, and
+            send calendar invites on your behalf — all synced with Google.
           </Text>
           <Button
             label="Connect Google Calendar"

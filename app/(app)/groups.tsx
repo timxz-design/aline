@@ -4,6 +4,7 @@ import {
   Alert,
   Animated,
   FlatList,
+  Linking,
   Modal,
   Pressable,
   StyleSheet,
@@ -35,6 +36,7 @@ type GroupRow = {
   created_by: string;
   member_count: number;
   member_ids: string[];
+  member_names: string[];
   hangouts: HangoutWithResponses[];
   muted_until: string | null;
 };
@@ -77,7 +79,7 @@ export default function GroupsScreen() {
         supabase.from('groups').select('*').in('id', groupIds),
         supabase
           .from('group_members')
-          .select('group_id, user_id')
+          .select('group_id, user_id, profiles(handle, first_name)')
           .in('group_id', groupIds),
         supabase
           .from('hangouts')
@@ -89,10 +91,22 @@ export default function GroupsScreen() {
       ]);
 
     const memberIdsByGroup = new Map<string, string[]>();
-    allMembers?.forEach((m) => {
+    const memberNamesByGroup = new Map<string, string[]>();
+    (allMembers as unknown as Array<{
+      group_id: string;
+      user_id: string;
+      profiles: { handle: string | null; first_name: string | null } | null;
+    }> | null)?.forEach((m) => {
       const arr = memberIdsByGroup.get(m.group_id) ?? [];
       arr.push(m.user_id);
       memberIdsByGroup.set(m.group_id, arr);
+      const label =
+        m.user_id === user.id
+          ? 'You'
+          : m.profiles?.first_name || (m.profiles?.handle ? `@${m.profiles.handle}` : '?');
+      const names = memberNamesByGroup.get(m.group_id) ?? [];
+      names.push(label);
+      memberNamesByGroup.set(m.group_id, names);
     });
 
     // Fetch all responses for the visible hangouts in one shot
@@ -141,6 +155,7 @@ export default function GroupsScreen() {
           created_by: g.created_by,
           member_count: ids.length,
           member_ids: ids,
+          member_names: memberNamesByGroup.get(g.id) ?? [],
           hangouts: hangoutsByGroup.get(g.id) ?? [],
           muted_until: mutedByGroup.get(g.id) ?? null,
         };
@@ -432,6 +447,16 @@ function GroupCard({
         <Text style={styles.cardSub}>{group.description}</Text>
       ) : null}
 
+      {group.member_names.length > 0 ? (
+        <View style={styles.memberChipWrap}>
+          {group.member_names.map((name, idx) => (
+            <View key={idx} style={styles.memberChip}>
+              <Text style={styles.memberChipText}>{name}</Text>
+            </View>
+          ))}
+        </View>
+      ) : null}
+
       {group.hangouts.length === 0 ? (
         <Text style={styles.noHangout}>
           No hangouts yet. Ask ALINE to plan something.
@@ -508,6 +533,18 @@ function HangoutCard({
           {formatHangoutTime(hangout.proposed_start)}
           {hangout.venue_name ? ` · ${hangout.venue_name}` : ''}
         </Text>
+      ) : null}
+
+      {hangout.venue_name || hangout.venue_address ? (
+        <Pressable
+          onPress={() => openHangoutDirections(hangout)}
+          hitSlop={6}
+          style={styles.directionsRow}
+        >
+          <Text style={styles.directionsText}>
+            📍 {hangout.venue_address || hangout.venue_name} · Directions
+          </Text>
+        </Pressable>
       ) : null}
 
       {hangout.reasoning ? (
@@ -619,6 +656,19 @@ function formatHangoutTime(iso: string): string {
     minute: '2-digit',
     hour12: false,
   });
+}
+
+/** Open the hangout's venue in Google Maps — exact coords if we have them,
+ *  otherwise a text query of the venue name/address. */
+function openHangoutDirections(h: Hangout): void {
+  let url: string | null = null;
+  if (typeof h.venue_lat === 'number' && typeof h.venue_lng === 'number') {
+    url = `https://maps.google.com/?q=${h.venue_lat},${h.venue_lng}`;
+  } else {
+    const q = [h.venue_name, h.venue_address].filter(Boolean).join(' ').trim();
+    if (q) url = `https://maps.google.com/?q=${encodeURIComponent(q)}`;
+  }
+  if (url) Linking.openURL(url).catch(() => {});
 }
 
 function CreateGroupModal({
@@ -744,6 +794,21 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
   },
   addMemberText: { color: colors.accent, fontSize: 11, fontWeight: '700' },
+  memberChipWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 6,
+  },
+  memberChip: {
+    backgroundColor: colors.bgRaised,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.pill,
+    paddingHorizontal: 10,
+    paddingVertical: 3,
+  },
+  memberChipText: { color: colors.textMuted, fontSize: 12 },
   cardSub: { color: colors.textMuted, fontSize: 13 },
   noHangout: { color: colors.textDim, fontSize: 12, fontStyle: 'italic', marginTop: 4 },
 
@@ -801,6 +866,14 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     fontSize: 13,
     marginLeft: 16,
+  },
+  directionsRow: {
+    marginLeft: 16,
+    marginTop: 3,
+  },
+  directionsText: {
+    color: colors.accent,
+    fontSize: 12,
   },
   hangoutReasoning: {
     color: colors.textMuted,

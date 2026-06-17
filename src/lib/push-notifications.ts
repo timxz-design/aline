@@ -120,7 +120,17 @@ export async function deregisterPushToken(): Promise<void> {
  * Falls back to the home tab if nothing matches.
  */
 export function routeForNotification(data: Record<string, unknown> | undefined): string {
-  if (!data || typeof data !== 'object') return '/(app)/week';
+  if (!data || typeof data !== 'object') return '/(app)/agent';
+
+  // Proactive pushes (weather, reminders, leave-by, live-status, goal pacing,
+  // morning brief, etc.) are mirrored into the agent chat thread server-side
+  // and carry the id of that message. Deep-link straight to it so the user
+  // lands on the nudge instead of the bottom of the thread.
+  const mid = (data as { chat_message_id?: string }).chat_message_id;
+  if (typeof mid === 'string' && mid) {
+    return `/(app)/agent?focus=${encodeURIComponent(mid)}`;
+  }
+
   const t = (data as { type?: string }).type;
 
   switch (t) {
@@ -136,6 +146,7 @@ export function routeForNotification(data: Record<string, unknown> | undefined):
       return '/(app)/profile';
 
     default:
-      return '/(app)/week';
+      // Chat is home — anything unrecognized lands with the agent.
+      return '/(app)/agent';
   }
 }

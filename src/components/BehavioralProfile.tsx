@@ -309,11 +309,9 @@ function PlaceRow({ place, onChange }: { place: Place; onChange: () => void }) {
           {place.ping_count > 0 ? ` · ${place.ping_count} pings` : ''}
         </Text>
       </Pressable>
-      {isUnlabelled ? (
-        <Pressable onPress={openInMaps} hitSlop={6} style={styles.action}>
-          <Text style={[styles.actionText, { color: colors.accent }]}>Map</Text>
-        </Pressable>
-      ) : null}
+      <Pressable onPress={openInMaps} hitSlop={6} style={styles.action}>
+        <Text style={[styles.actionText, { color: colors.accent }]}>Map</Text>
+      </Pressable>
       <Pressable onPress={onHideToggle} disabled={busy} hitSlop={6} style={styles.action}>
         <Text style={styles.actionText}>{place.is_hidden ? 'Unhide' : 'Hide'}</Text>
       </Pressable>

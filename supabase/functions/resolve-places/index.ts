@@ -143,25 +143,40 @@ type PlacesHit = {
   displayName?: { text: string };
   primaryType?: string;
   types?: string[];
+  location?: { latitude: number; longitude: number };
 };
+
+// Non-activity infrastructure we never want to label a person's visit as.
+// Excluded at the API level so they don't even count toward maxResultCount.
+const EXCLUDED_TYPES = [
+  'parking',
+  'bus_stop',
+  'bus_station',
+  'transit_station',
+  'train_station',
+  'subway_station',
+  'light_rail_station',
+  'transit_depot',
+];
 
 async function nearbySearch(
   lat: number,
   lon: number,
-  radiusM = 100,
-): Promise<PlacesHit | null> {
+  radiusM = 40,
+): Promise<PlacesHit[]> {
   const res = await fetch('https://places.googleapis.com/v1/places:searchNearby', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'X-Goog-Api-Key': GOOGLE_PLACES_API_KEY!,
       // Basic-tier field mask — keeps us on the cheaper SKU.
-      'X-Goog-FieldMask': 'places.id,places.displayName,places.types,places.primaryType',
+      'X-Goog-FieldMask': 'places.id,places.displayName,places.types,places.primaryType,places.location',
     },
     body: JSON.stringify({
       locationRestriction: {
         circle: { center: { latitude: lat, longitude: lon }, radius: radiusM },
       },
+      excludedTypes: EXCLUDED_TYPES,
       maxResultCount: 5,
       rankPreference: 'DISTANCE',
     }),
@@ -172,7 +187,77 @@ async function nearbySearch(
     throw new Error(`Google Places ${res.status}: ${errText}`);
   }
   const data = (await res.json()) as { places?: PlacesHit[] };
-  return data.places?.[0] ?? null;
+  return data.places ?? [];
+}
+
+// Primary types that are landmarks / generic / non-activity — we'd rather
+// return NO_MATCH than label a person's visit as one of these. A named tree
+// ("Drevo Tulipovac") shows up as tourist_attraction / natural_feature; a
+// bare point_of_interest tells us nothing about what the person was doing.
+const GENERIC_PRIMARY_REJECT = new Set([
+  'tourist_attraction',
+  'natural_feature',
+  'point_of_interest',
+  'premise',
+  'route',
+  'street_address',
+  'plus_code',
+  'locality',
+  'political',
+  'establishment',
+]);
+
+/**
+ * Choose the best candidate for "what was this person doing here", or null
+ * (→ NO_MATCH). Bias: a no-match beats a false match.
+ *   - reject transit/parking (also excluded server-side) anywhere in types
+ *   - reject landmarks / generic / unknown-primary entries
+ *   - among survivors prefer real activity venues, tie-break by distance
+ */
+function selectBestCandidate(
+  hits: PlacesHit[],
+  centerLat: number,
+  centerLon: number,
+): PlacesHit | null {
+  let best: PlacesHit | null = null;
+  let bestScore = -Infinity;
+
+  for (const hit of hits) {
+    const primary = (hit.primaryType ?? '').toLowerCase();
+    const allTypes = (hit.types ?? []).map((t) => t.toLowerCase());
+
+    // Hard junk anywhere in the type list.
+    if (EXCLUDED_TYPES.some((b) => primary === b || allTypes.includes(b))) continue;
+    // Unknown or generic/landmark primary type → reject (prefer no-match).
+    if (!primary || GENERIC_PRIMARY_REJECT.has(primary)) continue;
+
+    const dist =
+      hit.location
+        ? haversineMeters(centerLat, centerLon, hit.location.latitude, hit.location.longitude)
+        : 0;
+    const isActivity = categorize(primary) !== 'other';
+    // Activity venues dominate; nearer is better. (1000 >> any 40 m distance.)
+    const score = (isActivity ? 1000 : 0) - dist;
+
+    if (score > bestScore) {
+      bestScore = score;
+      best = hit;
+    }
+  }
+
+  return best;
+}
+
+/** Haversine distance in metres. */
+function haversineMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6_371_000;
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
 // ---------- handler ---------------------------------------------------------
@@ -209,7 +294,7 @@ Deno.serve(async (req: Request) => {
 
   let q = supabase
     .from('places')
-    .select('id, geohash_7, google_place_id, name, category, inference_status, user_label')
+    .select('id, geohash_7, centroid_lat, centroid_lon, google_place_id, name, category, inference_status, user_label')
     .eq('user_id', userId)
     .is('google_place_id', null);
   if (bodyIds && bodyIds.length > 0) q = q.in('id', bodyIds);
@@ -232,8 +317,17 @@ Deno.serve(async (req: Request) => {
 
   for (const p of places) {
     try {
-      const { lat, lon } = decodeGeohash(p.geohash_7);
-      const hit = await nearbySearch(lat, lon, 100);
+      // Prefer the precise cluster centroid; fall back to the (imprecise)
+      // geohash_7 cell center only for legacy rows that predate centroid cols.
+      const lat = typeof p.centroid_lat === 'number'
+        ? p.centroid_lat
+        : decodeGeohash(p.geohash_7).lat;
+      const lon = typeof p.centroid_lon === 'number'
+        ? p.centroid_lon
+        : decodeGeohash(p.geohash_7).lon;
+
+      const hits = await nearbySearch(lat, lon, 40);
+      const hit = selectBestCandidate(hits, lat, lon);
 
       if (!hit) {
         results.push({ place_id: p.id, ok: true, name: undefined });

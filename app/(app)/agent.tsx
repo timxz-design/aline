@@ -1,5 +1,10 @@
 import { useLocalSearchParams } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
+import * as Speech from 'expo-speech';
+import {
+  ExpoSpeechRecognitionModule,
+  useSpeechRecognitionEvent,
+} from 'expo-speech-recognition';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -12,6 +17,7 @@ import {
   View,
 } from 'react-native';
 import { AgentChangeSetCard } from '../../src/components/AgentChangeSetCard';
+import { DayStrip } from '../../src/components/DayStrip';
 import { Screen } from '../../src/components/Screen';
 import { useAuth } from '../../src/lib/auth-context';
 import { supabase } from '../../src/lib/supabase';
@@ -37,14 +43,22 @@ import { colors, font, radius, space } from '../../src/theme';
 export default function AgentScreen() {
   const { user } = useAuth();
   const { profile } = useProfile();
-  const { seed } = useLocalSearchParams<{ seed?: string }>();
+  const { seed, focus } = useLocalSearchParams<{ seed?: string; focus?: string }>();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  // Id of a message to scroll to + briefly highlight (set when the user taps a
+  // proactive notification that deep-links to its chat message).
+  const [highlightId, setHighlightId] = useState<string | null>(null);
+  const focusHandledRef = useRef(false);
   const [draft, setDraft] = useState(typeof seed === 'string' ? seed : '');
   const [thinking, setThinking] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const listRef = useRef<FlatList<ChatMessage>>(null);
   const { byMessage: changeSetsByMessage } = useChangeSets();
+  const [listening, setListening] = useState(false);
+  // When the user spoke their message, speak the reply back (voice in → voice
+  // out). A ref so the realtime handler (stable closure) reads the live value.
+  const voiceReplyRef = useRef(false);
 
   useEffect(() => {
     if (!user) return;
@@ -89,6 +103,13 @@ export default function AgentScreen() {
             if (prev.some((m) => m.id === msg.id)) return prev;
             return [...prev, msg];
           });
+          // Voice in → voice out: speak the agent's reply only if the last
+          // message was spoken. Typed conversations stay silent.
+          if (msg.role === 'agent' && voiceReplyRef.current) {
+            voiceReplyRef.current = false;
+            Speech.stop();
+            Speech.speak(msg.content, { rate: 1.0 });
+          }
         }
       )
       .subscribe();
@@ -97,9 +118,12 @@ export default function AgentScreen() {
     };
   }, [user?.id]);
 
-  const send = async () => {
-    if (!user || !draft.trim() || thinking) return;
-    const content = draft.trim();
+  const send = () => sendText(draft, false);
+
+  const sendText = async (raw: string, fromVoice: boolean) => {
+    if (!user || !raw.trim() || thinking) return;
+    const content = raw.trim();
+    voiceReplyRef.current = fromVoice;
     setDraft('');
     setError(null);
 
@@ -143,9 +167,56 @@ export default function AgentScreen() {
     }
   };
 
-  // Auto-scroll to bottom on new messages and after initial load
+  // ---- Voice input (on-device STT) ----
+  useSpeechRecognitionEvent('result', (e) => {
+    const t = e.results?.[0]?.transcript ?? '';
+    if (t) setDraft(t);
+    if (e.isFinal && t.trim()) {
+      setListening(false);
+      sendText(t, true);
+    }
+  });
+  useSpeechRecognitionEvent('end', () => setListening(false));
+  useSpeechRecognitionEvent('error', (e) => {
+    setListening(false);
+    console.warn('speech recognition error:', e?.error);
+  });
+
+  // Stop any voice activity when leaving the screen.
   useEffect(() => {
-    if (messages.length > 0) {
+    return () => {
+      Speech.stop();
+      try { ExpoSpeechRecognitionModule.stop(); } catch {}
+    };
+  }, []);
+
+  const toggleMic = useCallback(async () => {
+    if (listening) {
+      ExpoSpeechRecognitionModule.stop();
+      setListening(false);
+      return;
+    }
+    Speech.stop(); // don't listen over our own voice
+    const perm = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
+    if (!perm.granted) {
+      setError('Allow microphone & speech recognition in Settings to talk to ALINE.');
+      return;
+    }
+    setError(null);
+    setDraft('');
+    setListening(true);
+    ExpoSpeechRecognitionModule.start({
+      lang: 'en-US',
+      interimResults: true,
+      continuous: false,
+    });
+  }, [listening]);
+
+  // Auto-scroll to bottom on new messages and after initial load — unless we
+  // have a pending notification focus to honor (handled by the effect below).
+  useEffect(() => {
+    const focusPending = !!focus && !focusHandledRef.current;
+    if (messages.length > 0 && !focusPending) {
       // Double rAF ensures the list has finished layout before scrolling
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
@@ -153,16 +224,36 @@ export default function AgentScreen() {
         });
       });
     }
-  }, [messages.length]);
+  }, [messages.length, focus]);
+
+  // Notification deep-link: scroll to the focused message and pulse a
+  // highlight. Waits for the message to be present (it may arrive via realtime
+  // a beat after navigation). Handled once per focus value.
+  useEffect(() => {
+    if (!focus || focusHandledRef.current) return;
+    const idx = messages.findIndex((m) => m.id === focus);
+    if (idx < 0) return; // not loaded yet — retry when messages update
+    focusHandledRef.current = true;
+    setHighlightId(focus);
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        try {
+          listRef.current?.scrollToIndex({ index: idx, viewPosition: 0.5, animated: true });
+        } catch {
+          listRef.current?.scrollToEnd({ animated: true });
+        }
+      });
+    });
+    const t = setTimeout(() => setHighlightId(null), 2200);
+    return () => clearTimeout(t);
+  }, [focus, messages]);
 
   return (
     <Screen noPadding>
       <View style={styles.header}>
-        <View>
-          <Text style={styles.title}>ALINE</Text>
-          <Text style={styles.subtitle}>Your personal agent</Text>
-        </View>
+        <Text style={styles.title}>ALINE</Text>
       </View>
+      <DayStrip />
 
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -185,12 +276,20 @@ export default function AgentScreen() {
               <Bubble
                 msg={item}
                 changeSet={changeSetsByMessage[item.id]}
+                highlighted={item.id === highlightId}
                 onPromptDifferentTime={(s) => setDraft(s)}
               />
             )}
             ItemSeparatorComponent={() => <View style={{ height: space.sm }} />}
-            onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: false })}
-            onLayout={() => listRef.current?.scrollToEnd({ animated: false })}
+            onContentSizeChange={() => {
+              if (!highlightId) listRef.current?.scrollToEnd({ animated: false });
+            }}
+            onLayout={() => {
+              if (!highlightId) listRef.current?.scrollToEnd({ animated: false });
+            }}
+            onScrollToIndexFailed={() => {
+              listRef.current?.scrollToEnd({ animated: true });
+            }}
           />
         )}
 
@@ -215,13 +314,24 @@ export default function AgentScreen() {
         <View style={styles.composer}>
           <TextInput
             style={styles.composerInput}
-            placeholder="Talk to ALINE…"
+            placeholder={listening ? 'Listening…' : 'Talk to ALINE…'}
             placeholderTextColor={colors.textDim}
             value={draft}
             onChangeText={setDraft}
             multiline
             onSubmitEditing={send}
           />
+          <Pressable
+            onPress={toggleMic}
+            disabled={thinking}
+            style={({ pressed }) => [
+              styles.micBtn,
+              listening && styles.micBtnActive,
+              pressed && { opacity: 0.8 },
+            ]}
+          >
+            <Text style={styles.micBtnText}>{listening ? '◼' : '🎤'}</Text>
+          </Pressable>
           <Pressable
             onPress={send}
             disabled={!draft.trim() || thinking}
@@ -239,16 +349,75 @@ export default function AgentScreen() {
   );
 }
 
+/** Short local clock (HH:MM, 24h) for a chat message timestamp. */
+function shortClock(iso: string | null): string {
+  if (!iso) return '';
+  try {
+    return new Date(iso).toLocaleTimeString([], {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    });
+  } catch {
+    return '';
+  }
+}
+
+/** Header label per proactive-push kind. */
+const PROACTIVE_LABEL: Record<string, string> = {
+  weather: 'Heads up',
+  live_status: 'Heads up',
+  reminder: 'Reminder',
+  leave_by: 'Time to head out',
+  hangout_soon: 'Coming up',
+  rsvp_nudge: 'Waiting on you',
+  goal_pacing: 'Weekly goals',
+  morning: 'Good morning',
+};
+
 function Bubble({
   msg,
   changeSet,
+  highlighted,
   onPromptDifferentTime,
 }: {
   msg: ChatMessage;
   changeSet?: PendingChangeSet;
+  highlighted?: boolean;
   onPromptDifferentTime?: (s: string) => void;
 }) {
   const isUser = msg.role === 'user';
+  const ed = (msg.extracted_data ?? null) as
+    | { proactive?: boolean; kind?: string }
+    | null;
+  const isProactive = !isUser && ed?.proactive === true;
+
+  // Proactive notifications render as a distinct card (accent rail + header)
+  // so a nudge reads as a nudge, not a reply.
+  if (isProactive) {
+    const label = PROACTIVE_LABEL[ed?.kind ?? ''] ?? 'Heads up';
+    const time = shortClock(msg.created_at);
+    return (
+      <View>
+        <View style={styles.rowLeft}>
+          <View style={[styles.proactiveCard, highlighted && styles.cardHighlight]}>
+            <View style={styles.proactiveHeader}>
+              <Text style={styles.proactiveLabel}>{label}</Text>
+              {time ? <Text style={styles.proactiveTime}>{time}</Text> : null}
+            </View>
+            <Text style={styles.bubbleText}>{msg.content}</Text>
+          </View>
+        </View>
+        {changeSet ? (
+          <AgentChangeSetCard
+            changeSet={changeSet}
+            onPromptDifferentTime={onPromptDifferentTime}
+          />
+        ) : null}
+      </View>
+    );
+  }
+
   return (
     <View>
       <View style={[styles.row, isUser ? styles.rowRight : styles.rowLeft]}>
@@ -256,6 +425,7 @@ function Bubble({
           style={[
             styles.bubble,
             isUser ? styles.bubbleUser : styles.bubbleAgent,
+            highlighted && styles.cardHighlight,
           ]}
         >
           <Text style={[styles.bubbleText, isUser && styles.bubbleTextUser]}>
@@ -345,6 +515,40 @@ const styles = StyleSheet.create({
   },
   bubbleText: { color: colors.text, fontSize: 15, lineHeight: 22 },
   bubbleTextUser: { color: colors.textInverse },
+  proactiveCard: {
+    maxWidth: '88%',
+    paddingHorizontal: space.md,
+    paddingVertical: 10,
+    borderRadius: radius.lg,
+    backgroundColor: colors.bgElevated,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderLeftWidth: 3,
+    borderLeftColor: colors.accent,
+    gap: 4,
+  },
+  proactiveHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: space.sm,
+  },
+  proactiveLabel: {
+    color: colors.accent,
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+  },
+  proactiveTime: {
+    color: colors.textDim,
+    fontSize: 11,
+    fontVariant: ['tabular-nums'],
+  },
+  cardHighlight: {
+    borderColor: colors.accent,
+    backgroundColor: 'rgba(94, 234, 212, 0.12)',
+  },
   thinkingRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -397,6 +601,21 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  micBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: colors.bgRaised,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  micBtnActive: {
+    backgroundColor: colors.danger,
+    borderColor: colors.danger,
+  },
+  micBtnText: { fontSize: 16 },
   sendBtnDisabled: { backgroundColor: colors.bgRaised },
   sendBtnText: {
     color: colors.textInverse,

@@ -91,6 +91,55 @@ type UpcomingHangoutRow = {
 type BehavioralSummaryRow = {
   archetype_text: string | null;
   data_quality: string | null;
+  chronotype: string | null;
+  bedtime_minute: number | null;
+  waketime_minute: number | null;
+  weekly_workout_count: number | null;
+};
+
+type PlaceRow = {
+  name: string | null;
+  user_label: string | null;
+  category: string | null;
+};
+
+type WeekEventRow = {
+  id: string;
+  title: string | null;
+  start_at: string;
+  end_at: string;
+  event_type: string | null;
+  is_movable: boolean | null;
+  location: string | null;
+};
+
+type PatternRow = {
+  activity_key: string;
+  day_of_week: number;
+  time_bucket: number;
+  count: number;
+  confidence: number;
+  places: { name: string | null; user_label: string | null } | null;
+};
+
+type RecentChangeRow = {
+  reasoning: string | null;
+  status: string;
+  updated_at: string;
+};
+
+type LiveStatusRow = {
+  live_status: string;
+  scheduled_start: string;
+  scheduled_end: string;
+  calendar_events: { title: string | null } | null;
+  places: { user_label: string | null; name: string | null } | null;
+};
+
+type ReminderRow = {
+  id: string;
+  content: string;
+  remind_at: string;
 };
 
 type Extracted = {
@@ -120,6 +169,8 @@ const ANTHROPIC_API_KEY = Deno.env.get('ANTHROPIC_API_KEY');
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 // @ts-expect-error
 const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!;
+// @ts-expect-error
+const OPENWEATHER_API_KEY = Deno.env.get('OPENWEATHER_API_KEY');
 
 const MAX_TOOL_ROUNDS = 3;
 
@@ -327,10 +378,19 @@ const TOOLS = [
           description:
             "One short sentence the user will see at the top of the proposal card, explaining the whole bundle.",
         },
+        apply: {
+          type: 'boolean',
+          description:
+            "Set TRUE to apply the change immediately with NO confirmation card — use this when " +
+            "${firstName} EXPLICITLY asked for this specific change (e.g. 'schedule a haircut Thursday 2pm', " +
+            "'move my gym to 7pm'). Set FALSE (or omit) when YOU are suggesting or autonomously " +
+            "reorganizing/rescheduling (e.g. shuffling blocks for a delay, mood, or conflict) — then the " +
+            "user gets an Accept/Reject card. Rule of thumb: user directed it → apply:true; you decided it → apply:false.",
+        },
         operations: {
           type: 'array',
           minItems: 1,
-          maxItems: 5,
+          maxItems: 12,
           items: {
             type: 'object',
             description:
@@ -339,6 +399,74 @@ const TOOLS = [
         },
       },
       required: ['summary_for_user', 'operations'],
+    },
+  },
+  {
+    name: 'set_reminder',
+    description:
+      "Set a lightweight reminder — a push nudge at a specific time, NOT a calendar block. Use when the user wants to be reminded of a small task that doesn't occupy time ('remind me to send that email at 4pm', 'remind me to call mom tomorrow morning'). Applies immediately, no confirmation needed. If the user asks to BLOCK TIME for something, use propose_change_set instead.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        content: {
+          type: 'string',
+          description: "What to remind them of, phrased as a short spoken sentence ('Send the email to Marko').",
+        },
+        remind_at: {
+          type: 'string',
+          description: "When to fire, ISO 8601 in the user's LOCAL time (no Z, no offset). Look the date up in the Date reference table.",
+        },
+      },
+      required: ['content', 'remind_at'],
+    },
+  },
+  {
+    name: 'cancel_reminder',
+    description:
+      "Cancel a pending reminder. Use the EXACT id from the Pending reminders list in the system prompt.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        reminder_id: { type: 'string', description: 'UUID from the Pending reminders list.' },
+      },
+      required: ['reminder_id'],
+    },
+  },
+  {
+    name: 'get_weather',
+    description:
+      "Get the weather forecast near the user's home (3-hour steps, up to 5 days ahead). Call this BEFORE proposing or confirming any weather-sensitive activity — walk, run, bike, hike, picnic, outdoor sports — and when the user asks whether an outdoor plan still makes sense. Location is resolved automatically from their places; you only pick the date.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        date: {
+          type: 'string',
+          description:
+            "Local date to forecast, 'YYYY-MM-DD' (look it up in the Date reference table). Omit for the next 24 hours.",
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'send_calendar_invite',
+    description:
+      "Create a real event on the user's Google Calendar and email a calendar invite to one or more people by email address. Use this to invite someone who is NOT on ALINE (no @handle) — e.g. the user says \"invite jane@email.com to coffee Friday 3pm\". The event also appears on the user's own calendar immediately. CRITICAL: this emails real people, so you MUST first describe the invite (who, what, when, where) in plain text and get the user's explicit go-ahead in a SEPARATE turn before calling this tool — never send on the same turn you first mention it. Requires Google Calendar connected with write permission; if it fails for permission reasons, tell the user to reconnect Google Calendar in the You tab.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: 'Event title, e.g. "Coffee with Jane".' },
+        start: { type: 'string', description: 'Start time as full ISO 8601 with offset, e.g. 2026-06-19T15:00:00+02:00.' },
+        end: { type: 'string', description: 'End time as full ISO 8601 with offset. Default 1 hour after start if unsure.' },
+        attendee_emails: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Email addresses to invite. At least one.',
+        },
+        location: { type: 'string', description: 'Optional venue / address.' },
+        description: { type: 'string', description: 'Optional note included in the invite.' },
+      },
+      required: ['title', 'start', 'end', 'attendee_emails'],
     },
   },
 ] as const;
@@ -364,6 +492,12 @@ function buildSystemPromptBlocks(input: {
   behavioralSummary: BehavioralSummaryRow | null;
   friends: FriendRow[];
   upcomingHangouts: UpcomingHangoutRow[];
+  places: PlaceRow[];
+  weekEvents: WeekEventRow[];
+  patterns: PatternRow[];
+  recentChanges: RecentChangeRow[];
+  liveStatuses: LiveStatusRow[];
+  reminders: ReminderRow[];
 }): { staticBlock: string; dynamicBlock: string } {
   const {
     firstName,
@@ -375,6 +509,12 @@ function buildSystemPromptBlocks(input: {
     behavioralSummary,
     friends,
     upcomingHangouts,
+    places,
+    weekEvents,
+    patterns,
+    recentChanges,
+    liveStatuses,
+    reminders,
   } = input;
 
   const goalLines =
@@ -436,6 +576,150 @@ function buildSystemPromptBlocks(input: {
           })
           .join('\n');
 
+  const placeLines =
+    places.length === 0
+      ? 'No places learned yet.'
+      : places
+          .map(
+            (p) =>
+              `  - ${p.user_label || p.name || 'Unnamed'}${
+                p.category ? ` (${p.category})` : ''
+              }`
+          )
+          .join('\n');
+
+  const fmtMin = (m: number | null): string => {
+    if (m == null) return '??:??';
+    const hh = Math.floor(((m % 1440) + 1440) % 1440 / 60);
+    const mm = ((m % 60) + 60) % 60;
+    return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+  };
+  const rhythmReliable =
+    behavioralSummary?.data_quality === 'high' &&
+    (behavioralSummary?.waketime_minute != null ||
+      behavioralSummary?.bedtime_minute != null);
+  const rhythmLine = rhythmReliable
+    ? `Daily rhythm (inferred, reliable): wakes ~${fmtMin(
+        behavioralSummary!.waketime_minute,
+      )}, sleeps ~${fmtMin(behavioralSummary!.bedtime_minute)}${
+        behavioralSummary!.chronotype ? ` · ${behavioralSummary!.chronotype}` : ''
+      }${
+        behavioralSummary!.weekly_workout_count != null
+          ? ` · ~${behavioralSummary!.weekly_workout_count} workouts/week`
+          : ''
+      }. Plan within waking hours; don't schedule over sleep.`
+    : null;
+
+  const scheduleLines =
+    weekEvents.length === 0
+      ? 'Nothing on the calendar in the next 7 days.'
+      : weekEvents
+          .map((e) => {
+            const when = new Date(e.start_at).toLocaleString('en-US', {
+              timeZone: timezone,
+              weekday: 'short',
+              hour: '2-digit',
+              minute: '2-digit',
+              hour12: false,
+            });
+            const end = new Date(e.end_at).toLocaleString('en-US', {
+              timeZone: timezone,
+              hour: '2-digit',
+              minute: '2-digit',
+              hour12: false,
+            });
+            const tag =
+              e.event_type === 'routine'
+                ? ' [routine]'
+                : e.event_type === 'transit'
+                  ? ' [transit]'
+                  : e.event_type === 'coordinated'
+                    ? ' [hangout]'
+                    : '';
+            const movable =
+              e.is_movable && e.event_type !== 'coordinated' && e.event_type !== 'transit';
+            const passed = new Date(e.end_at).getTime() < Date.now() ? ' · ALREADY PASSED' : '';
+            return `  - ${when}–${end} ${e.title ?? 'Untitled'}${tag}${
+              e.location ? ` @ ${e.location}` : ''
+            } · id: ${e.id}${movable ? ' · movable' : ''}${passed}`;
+          })
+          .join('\n');
+
+  // Fused belief: collapse the learned distribution to the top location per
+  // activity (rows arrive ordered by count desc, so first-per-key is dominant).
+  const seenKeys = new Set<string>();
+  const patternLines =
+    patterns.length === 0
+      ? 'Nothing learned yet — patterns build as activities recur.'
+      : patterns
+          .filter((p) => {
+            if (seenKeys.has(p.activity_key)) return false;
+            seenKeys.add(p.activity_key);
+            return true;
+          })
+          .slice(0, 8)
+          .map((p) => {
+            const place = p.places?.user_label || p.places?.name || 'no fixed place';
+            return `  - ${p.activity_key} → usually ${place} (${Math.round(
+              p.confidence * 100,
+            )}% of the time)`;
+          })
+          .join('\n');
+
+  const relTime = (iso: string): string => {
+    const mins = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
+    if (mins < 1) return 'just now';
+    if (mins < 60) return `${mins}m ago`;
+    const h = Math.round(mins / 60);
+    return h < 24 ? `${h}h ago` : `${Math.round(h / 24)}d ago`;
+  };
+  const changeLines =
+    recentChanges.length === 0
+      ? 'None recently.'
+      : recentChanges
+          .map(
+            (c) =>
+              `  - ${c.status === 'accepted' ? '✓ accepted' : '✗ declined'} (${relTime(
+                c.updated_at,
+              )}): ${c.reasoning ?? 'a calendar change'}`,
+          )
+          .join('\n');
+
+  const liveStatusLabel: Record<string, string> = {
+    late_incoming: 'running late (appears to be on the way)',
+    likely_skip: 'looks like they skipped / are not there',
+    unknown_location: 'at an unrecognized place',
+    unknown: 'no location signal',
+  };
+  const liveLines =
+    liveStatuses.length === 0
+      ? 'Nothing flagged.'
+      : liveStatuses
+          .map((l) => {
+            const title = l.calendar_events?.title ?? 'an activity';
+            const place = l.places?.user_label || l.places?.name;
+            return `  - "${title}"${place ? ` (expected @ ${place})` : ''}: ${
+              liveStatusLabel[l.live_status] ?? l.live_status
+            }`;
+          })
+          .join('\n');
+
+  const reminderLines =
+    reminders.length === 0
+      ? 'None pending.'
+      : reminders
+          .map((r) => {
+            const when = new Date(r.remind_at).toLocaleString('en-US', {
+              timeZone: timezone,
+              weekday: 'short',
+              hour: '2-digit',
+              minute: '2-digit',
+              hour12: false,
+            });
+            return `  - ${when}: "${r.content}" · id: ${r.id}`;
+          })
+          .join('\n');
+
   const staticBlock = `You are ALINE — ${firstName}'s personal AI agent.
 
 You help them coordinate their life and connect with the people who matter to them.
@@ -487,15 +771,58 @@ You learn from every conversation. You represent ${firstName} when their agent t
   asks about THEIR availability for solo blocks (gym, study, reading).
 
 - **propose_change_set** — Move things or add new blocks to ${firstName}'s
-  calendar. NEVER write to the calendar another way. User sees Accept/Reject
-  card. Compose changes atomically: if making dinner requires moving a gym
-  block, both go in the SAME change set. Summary_for_user is what the user
-  reads first — keep it conversational ("Move your Wed gym to Thu so dinner
-  with Marko fits Wed evening").
+  calendar. NEVER write to the calendar another way. Compose changes atomically:
+  if making dinner requires moving a gym block, both go in the SAME change set.
+  Summary_for_user is what the user reads first — keep it conversational.
+
+  **apply vs. confirm (important):**
+  - If ${firstName} EXPLICITLY asked for this specific change — "schedule a haircut
+    Thursday 2pm", "add a 1h run tomorrow morning", "move my gym to 7pm" — set
+    **apply: true**. It happens immediately, NO card. Just confirm in your reply
+    ("Done — haircut Thursday at 2pm."). Don't make them approve what they just asked for.
+  - If YOU are suggesting it or reorganizing autonomously — reshuffling for a delay,
+    a conflict, their mood/energy, or a plan-my-day where you chose the layout — set
+    **apply: false** (or omit). They get an Accept/Reject card, because the initiative
+    was yours, not theirs.
+  - When unsure, prefer apply:false (ask). A reschedule the user explicitly requested
+    is apply:true; a reschedule you initiated is apply:false.
 
   Bundling rule: when proposing a group hangout that also needs a calendar
   block, call propose_hangout FIRST to get the hangout id, then include a
   'create' op in the change set with the hangout_id linked.
+
+  Day-planning rule: when ${firstName} asks you to plan, structure, or lay out
+  a day (or a chunk of it), propose ALL the blocks together as multiple 'create'
+  ops in ONE change set (up to 12) — don't drip them one at a time. Place blocks
+  in the real free gaps (respect existing events, routines, transit, and the
+  sleep/wake window above), give each a clear title and time, and explain the
+  shape of the day in summary_for_user. One card, one approval, whole day laid out.
+
+- **set_reminder / cancel_reminder** — A reminder is a push NUDGE at a time, not
+  a calendar block. "Remind me to send that email at 4" → set_reminder (applies
+  immediately, no card, no block). Use a block (propose_change_set) only when the
+  task genuinely OCCUPIES time. When planning a day, small to-dos the user mentions
+  ("and remind me to call mom") become reminders, not blocks. Phrase content as a
+  short spoken sentence — pushes may be read aloud by Siri.
+
+- **get_weather** — Local forecast near ${firstName}'s home, 3h steps, ~5 days out.
+  Weather-aware planning rule: walks, runs, bike rides, hikes, picnics and outdoor
+  sports are weather-sensitive. CHECK THE FORECAST before proposing one, and when
+  ${firstName} asks about an upcoming outdoor plan. If the forecast at that time is
+  bad (likely rain, storm, extreme heat/cold), say so plainly and OFFER a fix —
+  a better slot the same day/week (find_open_slots) or an indoor alternative.
+  Don't silently reschedule, and don't mention weather for indoor activities.
+
+- **send_calendar_invite** — Invite someone who is NOT on ALINE (no @handle) by
+  email: creates a real Google Calendar event and emails them an invite. Use it
+  when ${firstName} gives an email or says "invite X by email". For people who
+  ARE on ALINE (have an @handle), use propose_hangout instead — never email them.
+  TWO-STEP, NO EXCEPTIONS: because this emails real people, first describe the
+  invite (who / what / when / where) in chat and ask "want me to send it?", then
+  call the tool ONLY after explicit approval on a later turn. apply-mode does not
+  apply here — there is no silent send, ever. Needs Google connected with write
+  access; on a permission failure, tell ${firstName} to reconnect Google Calendar
+  in the You tab.
 
 # Intent playbook — how to handle natural-language requests
 
@@ -510,6 +837,19 @@ propose. This is non-negotiable.
 2. Wait for explicit approval ("yes", "looks good", "sure"). Only THEN call
    the actual tool. If they push back ("not Wednesday", "later"), call
    find_mutual_slots again with the adjusted constraints.
+
+**Always settle the WHERE, not just the when.** A time with no place sends
+people back to texting each other — which defeats the point. When you confirm
+the time, also propose or capture a venue and pass it as venue_name (with
+venue_address when you know it):
+- If the user names a place ("at Čaj café", "my place", "Tivoli"), use it.
+- If they don't, SUGGEST one in the same chat message as the time ("4pm at
+  Čokl for coffee?") and let them approve both together. Pick somewhere that
+  fits the activity and is reasonable for both people.
+- Only leave the venue empty if the user explicitly wants to decide later
+  ("we'll figure out where"). In that case say so plainly.
+Same rule applies when rescheduling via update_hangout — keep or update the
+venue, don't silently drop it.
 
 **Threshold fallback for groups:**
 If strict find_mutual_slots (everyone free) returns zero slots for a group
@@ -586,6 +926,9 @@ ${
 ${behavioralSummary.archetype_text}`
     : `Note: no reliable sleep data yet. Do NOT make claims about ${firstName}'s sleep schedule, chronotype, bedtime, or wake time. If asked about sleep, say honestly that you don't have enough data yet — they need a couple more weeks of normal app usage first.`
 }
+${rhythmLine ? `\n${rhythmLine}\n` : ''}
+Their places (inferred — treat with humility, confirm rather than assert):
+${placeLines}
 
 Active goals:
 ${goalLines}
@@ -601,6 +944,62 @@ ${friendLines}
 
 Upcoming hangouts (next 5; USE THE EXACT id for cancel_hangout / update_hangout):
 ${upcomingLines}
+
+This week at a glance (next 7 days — real occupied time, your source of truth for what's scheduled):
+${scheduleLines}
+
+Learned patterns (fused from schedule + location over time — what usually happens where; use to
+predict and fill in likely locations, e.g. "your workout's probably at home"):
+${patternLines}
+
+Recently acted-on proposals (you proposed these; the user tapped a card — there's no chat
+message for it, so rely on this). Acknowledge accepted ones as DONE and don't re-propose them;
+respect declined ones:
+${changeLines}
+
+Live activity status (right now / just passed — inferred from location, may be wrong, so check
+before asserting):
+${liveLines}
+
+Pending reminders (USE THE EXACT id for cancel_reminder):
+${reminderLines}
+
+# Planning rules
+
+- The calendar above + upcoming hangouts are the SOURCE OF TRUTH for what's scheduled.
+  NEVER infer current plans from older chat messages — a past message saying "tomorrow
+  you have X" was relative to WHEN IT WAS SENT (see the [date] tags on messages), not now.
+  If it's not in the calendar/hangouts above, it is not scheduled.
+- Blocks tagged [routine] are inferred recurring patterns; [transit] blocks are commute
+  time. Treat BOTH as occupied — don't schedule over a routine's transit, and remember a
+  venue activity really consumes the activity PLUS its transit on each side.
+- Talk in terms of the activity ("your gym block at 18:00"), but respect the full
+  occupied span including transit when judging whether something else fits.
+- When planning the day, account for the daily rhythm (wake/sleep), goals, and stated
+  preferences above — don't propose things during sleep or that clash with a routine.
+
+**Rescheduling rule (never leave duplicates):** if ${firstName} wants to MOVE or reschedule
+something already on the calendar above, do NOT create a new block — that leaves the old one
+behind as a duplicate. Instead:
+  - For a 'movable' calendar block: use a propose_change_set **move** op with that block's
+    EXACT id (from the list above). A move updates the block in place, so the old time is
+    erased automatically.
+  - For a [hangout]: use update_hangout (not a calendar op).
+  - Only use a 'create' op for something genuinely NEW that isn't already on the calendar.
+  If you're changing the time of an existing activity and you can see its id above, you must
+  move it, not recreate it.
+  - Blocks marked ALREADY PASSED can still be moved to later today ("I overslept" → move the
+    missed gym block to a free slot, don't abandon it).
+  - **Never silently drop an activity.** If a move op fails (id not found), recover: re-check
+    the schedule list for the right id, or re-create the block at the new time — and say what
+    you did. The user asked to ADJUST their day, not to lose pieces of it.
+
+**Live-status intervention:** if the Live activity status above flags something, and it's relevant
+to what ${firstName} is saying (or they ask "what's my day"), act gently — don't nag unprompted:
+  - **running late** → offer to push the activity and cascade later blocks (one change_set).
+  - **looks like they skipped** → offer to reschedule it for later/another day.
+  - **unrecognized place** → ask what they're up to ("you're not at your usual spot — what's going on?").
+  Always phrase as a question/offer, never an accusation, and remember the signal can be wrong.
 
 # Output format (STRICT)
 
@@ -642,11 +1041,26 @@ Do NOT re-extract things already in "Known preferences".
     month: 'long',
     day: 'numeric',
   });
+  // Explicit weekday→date lookup for the next 14 days, in the user's timezone.
+  // LLMs are unreliable at day-of-week arithmetic — DON'T make the agent compute
+  // dates; it just reads them here (fixes the "Thursday landed on Friday" bug).
+  const dateRefLines: string[] = [];
+  for (let i = 0; i < 14; i++) {
+    const d = new Date(now.getTime() + i * 86_400_000);
+    const wd = d.toLocaleDateString('en-US', { timeZone: timezone, weekday: 'long' });
+    const ymd = d.toLocaleDateString('en-CA', { timeZone: timezone }); // YYYY-MM-DD
+    const tagn = i === 0 ? '  ← today' : i === 1 ? '  ← tomorrow' : '';
+    dateRefLines.push(`  ${wd} = ${ymd}${tagn}`);
+  }
   const dynamicBlock =
     `Now (UTC): ${now.toISOString()}\n` +
     `Now (${timezone}): ${localDateTime}\n` +
-    `Today (in user's local time): ${localDate}\n` +
-    `When you say "today" or "tomorrow", reason from the user's LOCAL date above, not UTC.`;
+    `Today (in user's local time): ${localDate}\n\n` +
+    `Date reference (user's local dates for the next 2 weeks). When the user names a weekday\n` +
+    `("Thursday", "next Tuesday"), DO NOT calculate the date yourself — look it up here and use\n` +
+    `the SOONEST matching date (if they name today's weekday, assume next week unless they say "today"):\n` +
+    dateRefLines.join('\n') +
+    `\nAll proposed_start / change-set times are this LOCAL date + the requested time (no Z, no offset).`;
 
   return { staticBlock, dynamicBlock };
 }
@@ -731,6 +1145,12 @@ Deno.serve(async (req: Request) => {
     summaryRes,
     friendsRes,
     upcomingHangoutsRes,
+    placesRes,
+    weekEventsRes,
+    patternsRes,
+    changeSetsRes,
+    liveStatusRes,
+    remindersRes,
   ] = await Promise.all([
     supabase
       .from('profiles')
@@ -769,7 +1189,7 @@ Deno.serve(async (req: Request) => {
       .maybeSingle(),
     supabase
       .from('behavioral_summary')
-      .select('archetype_text, data_quality')
+      .select('archetype_text, data_quality, chronotype, bedtime_minute, waketime_minute, weekly_workout_count')
       .eq('user_id', userId)
       .maybeSingle(),
     // Friends: mutual friendships where current user appears on either side.
@@ -798,6 +1218,63 @@ Deno.serve(async (req: Request) => {
       .gte('proposed_start', nowIso)
       .order('proposed_start', { ascending: true })
       .limit(5),
+    // Labelled places (home/work/gym…) — for "where" context + envelope humility.
+    supabase
+      .from('places')
+      .select('name, user_label, category')
+      .eq('user_id', userId)
+      .eq('is_hidden', false)
+      .not('category', 'is', null)
+      .order('visit_count', { ascending: false })
+      .limit(12),
+    // This week at a glance: real occupied time incl. materialized routines +
+    // transit. Window: earlier-today → +7 days. Including today's passed blocks
+    // matters: "I overslept, adjust my schedule" needs the 8am gym's id to MOVE
+    // it — if the list started at `now`, the agent couldn't see or move it.
+    supabase
+      .from('calendar_events')
+      .select('id, title, start_at, end_at, event_type, is_movable, location')
+      .eq('user_id', userId)
+      .gte('start_at', new Date(Date.now() - 18 * 3600_000).toISOString())
+      .lt('start_at', new Date(Date.now() + 7 * 86_400_000).toISOString())
+      .order('start_at', { ascending: true })
+      .limit(70),
+    // Fused occurrence memory: what activities usually happen where (learned).
+    supabase
+      .from('activity_patterns')
+      .select('activity_key, day_of_week, time_bucket, place_id, count, confidence, places(name, user_label)')
+      .eq('user_id', userId)
+      .gte('confidence', 0.5)
+      .order('count', { ascending: false })
+      .limit(30),
+    // Recently acted-on change sets — so the agent knows what the user accepted
+    // or declined (tapping the card leaves no chat message).
+    supabase
+      .from('change_sets')
+      .select('reasoning, status, updated_at')
+      .eq('user_id', userId)
+      .in('status', ['accepted', 'rejected'])
+      .gte('updated_at', new Date(Date.now() - 2 * 86_400_000).toISOString())
+      .order('updated_at', { ascending: false })
+      .limit(5),
+    // Live activity status — current/just-passed blocks flagged late/skip/etc.
+    supabase
+      .from('activity_log')
+      .select('live_status, scheduled_start, scheduled_end, calendar_events(title), places:predicted_place_id(user_label, name)')
+      .eq('user_id', userId)
+      .not('live_status', 'is', null)
+      .neq('live_status', 'on_track')
+      .gte('scheduled_end', new Date(Date.now() - 3 * 3600_000).toISOString())
+      .order('scheduled_start', { ascending: false })
+      .limit(4),
+    // Pending reminders — so the agent can list/cancel them and avoid duplicates.
+    supabase
+      .from('reminders')
+      .select('id, content, remind_at')
+      .eq('user_id', userId)
+      .eq('status', 'pending')
+      .order('remind_at', { ascending: true })
+      .limit(10),
   ]);
 
   const profile: ProfileRow = (profileRes.data as ProfileRow | null) ?? {
@@ -816,6 +1293,13 @@ Deno.serve(async (req: Request) => {
   const recentChat: ChatRow[] = ((chatRes.data as ChatRow[] | null) ?? []).reverse();
   const triggerMsg = triggerMsgRes.data as ChatRow | null;
   const behavioralSummary = (summaryRes.data as BehavioralSummaryRow | null) ?? null;
+  const places: PlaceRow[] = (placesRes.data as PlaceRow[] | null) ?? [];
+  const weekEvents: WeekEventRow[] = (weekEventsRes.data as WeekEventRow[] | null) ?? [];
+  const patterns: PatternRow[] = (patternsRes.data as PatternRow[] | null) ?? [];
+  const recentChanges: RecentChangeRow[] =
+    (changeSetsRes.data as RecentChangeRow[] | null) ?? [];
+  const liveStatuses: LiveStatusRow[] = (liveStatusRes.data as LiveStatusRow[] | null) ?? [];
+  const reminders: ReminderRow[] = (remindersRes.data as ReminderRow[] | null) ?? [];
 
   // Friends: pick "the other" profile from each friendship row.
   type FriendshipJoinRow = {
@@ -885,6 +1369,12 @@ Deno.serve(async (req: Request) => {
     behavioralSummary,
     friends,
     upcomingHangouts,
+    places,
+    weekEvents,
+    patterns,
+    recentChanges,
+    liveStatuses,
+    reminders,
   });
 
   // Anthropic prompt caching: cache_control on the static block. The dynamic
@@ -996,6 +1486,41 @@ Deno.serve(async (req: Request) => {
     // Append assistant turn (verbatim) and our user turn with tool_results.
     messages.push({ role: 'assistant', content: blocks });
     messages.push({ role: 'user', content: toolResults });
+  }
+
+  // If the tool-round limit was hit mid-tool-use, Claude never produced a final
+  // text turn — the user would see "(no response)" even though tools ran. Force
+  // one last text-only turn so the user always gets told what happened.
+  if (!finalText.trim()) {
+    const finalRes = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: MODEL,
+        max_tokens: 1024,
+        system: systemArray,
+        tools: TOOLS,
+        tool_choice: { type: 'none' },
+        messages,
+      }),
+    });
+    if (finalRes.ok) {
+      const finalData = (await finalRes.json()) as {
+        content?: ContentBlock[];
+        usage?: { input_tokens?: number; output_tokens?: number };
+      };
+      totalInputTokens += finalData.usage?.input_tokens ?? 0;
+      totalOutputTokens += finalData.usage?.output_tokens ?? 0;
+      finalText = (finalData.content ?? [])
+        .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
+        .map((b) => b.text)
+        .join('\n')
+        .trim();
+    }
   }
 
   const totalLatency = Date.now() - totalStart;
@@ -1590,8 +2115,8 @@ async function executeTool(
     if (operationsRaw.length === 0) {
       return { ok: false, message: 'at least one operation is required' };
     }
-    if (operationsRaw.length > 5) {
-      return { ok: false, message: 'too many operations in one change set (max 5)' };
+    if (operationsRaw.length > 12) {
+      return { ok: false, message: 'too many operations in one change set (max 12)' };
     }
 
     // Validate + normalize each op. We keep all string times in UTC after this.
@@ -1682,6 +2207,34 @@ async function executeTool(
       return { ok: false, message: `failed to persist change set: ${insertErr?.message ?? 'unknown'}` };
     }
 
+    // Apply-immediately mode: the user explicitly asked for THIS exact change, so
+    // skip the confirmation card and apply it now. (Autonomous reorganizes leave
+    // it pending → the user gets a card.)
+    if (input.apply === true) {
+      const { error: applyErr } = await supabase.rpc('apply_change_set', { _id: inserted.id });
+      if (applyErr) {
+        // Fall back to a pending proposal so nothing is lost.
+        return {
+          ok: true,
+          message: JSON.stringify({
+            change_set_id: inserted.id,
+            operations_count: normalized.length,
+            applied: false,
+            note: `could not auto-apply (${applyErr.message}); left as a proposal card`,
+          }),
+        };
+      }
+      return {
+        ok: true,
+        message: JSON.stringify({
+          change_set_id: inserted.id,
+          operations_count: normalized.length,
+          applied: true,
+          note: 'Applied directly (user-requested) — no card needed; confirm in your reply.',
+        }),
+      };
+    }
+
     return {
       ok: true,
       message: JSON.stringify({
@@ -1692,7 +2245,198 @@ async function executeTool(
     };
   }
 
+  if (name === 'set_reminder') {
+    const content = String(input.content ?? '').trim();
+    const remindAtRaw = String(input.remind_at ?? '');
+    if (!content) return { ok: false, message: 'content is required' };
+    const remindAt = normalizeIsoToUtc(remindAtRaw, userTimezone);
+    if (!remindAt) return { ok: false, message: `remind_at "${remindAtRaw}" is not parseable as ISO 8601` };
+    if (new Date(remindAt).getTime() < Date.now() - 60_000) {
+      return { ok: false, message: 'remind_at is in the past — double-check the date table' };
+    }
+    const { data, error } = await supabase
+      .from('reminders')
+      .insert({ user_id: userId, content, remind_at: remindAt })
+      .select('id')
+      .single();
+    if (error || !data) return { ok: false, message: `failed to set reminder: ${error?.message ?? 'unknown'}` };
+    return { ok: true, message: `Reminder set (id: ${data.id}). It fires as a push at the requested time.` };
+  }
+
+  if (name === 'cancel_reminder') {
+    const id = String(input.reminder_id ?? '');
+    if (!id) return { ok: false, message: 'reminder_id is required' };
+    const { data, error } = await supabase
+      .from('reminders')
+      .update({ status: 'cancelled' })
+      .eq('id', id)
+      .eq('user_id', userId)
+      .eq('status', 'pending')
+      .select('id');
+    if (error) return { ok: false, message: `failed to cancel: ${error.message}` };
+    if (!data || data.length === 0) return { ok: false, message: 'no pending reminder with that id' };
+    return { ok: true, message: 'Reminder cancelled.' };
+  }
+
+  if (name === 'send_calendar_invite') {
+    const title = String(input.title ?? '').trim();
+    const start = normalizeIsoToUtc(String(input.start ?? ''), userTimezone);
+    const end = normalizeIsoToUtc(String(input.end ?? ''), userTimezone);
+    const emails = Array.isArray(input.attendee_emails)
+      ? (input.attendee_emails as unknown[]).map((e) => String(e).trim()).filter(Boolean)
+      : [];
+    const location = input.location ? String(input.location).trim() : null;
+    const description = input.description ? String(input.description).trim() : null;
+    if (!title) return { ok: false, message: 'title is required' };
+    if (!start || !end) return { ok: false, message: 'start and end must be valid ISO 8601 (check the date table)' };
+    if (emails.length === 0) return { ok: false, message: 'at least one attendee email is required' };
+
+    const { data, error } = await supabase.functions.invoke('google-calendar-write', {
+      body: { op: 'create_event', title, start, end, attendee_emails: emails, location, description },
+    });
+    if (error) {
+      return { ok: false, message: `Could not create the invite: ${error.message}. If this looks like a permissions problem, ask the user to reconnect Google Calendar (with write access) in the You tab.` };
+    }
+    if (data && typeof data === 'object' && 'error' in data) {
+      const code = (data as { code?: string }).code;
+      if (code === 'insufficient_scope' || code === 'no_connection') {
+        return { ok: false, message: 'Google Calendar needs reconnecting WITH write permission. Tell the user to open the You tab and reconnect Google Calendar.' };
+      }
+      return { ok: false, message: `Invite failed: ${String((data as { error: string }).error)}` };
+    }
+    const googleId =
+      data && typeof data === 'object' && 'id' in data ? String((data as { id: string }).id) : null;
+
+    // Mirror as an ALINE-origin row so it shows on My Week immediately. The
+    // google_synced_at stamp keeps the sync push step from re-creating/re-PATCHing it.
+    if (googleId) {
+      await supabase.from('calendar_events').insert({
+        user_id: userId,
+        source: 'aline',
+        external_id: googleId,
+        event_type: 'fixed',
+        title,
+        description,
+        location,
+        start_at: start,
+        end_at: end,
+        google_synced_at: new Date().toISOString(),
+      });
+    }
+    return {
+      ok: true,
+      message: `Invite created and emailed to ${emails.join(', ')}; it's on the user's calendar too.`,
+    };
+  }
+
+  if (name === 'get_weather') {
+    if (!OPENWEATHER_API_KEY) {
+      return { ok: false, message: 'Weather is not configured (OPENWEATHER_API_KEY missing).' };
+    }
+    // Resolve coords: Home place centroid → any place centroid → latest ping.
+    let lat: number | null = null;
+    let lon: number | null = null;
+    const { data: homePlace } = await supabase
+      .from('places')
+      .select('centroid_lat, centroid_lon, category, user_label')
+      .eq('user_id', userId)
+      .not('centroid_lat', 'is', null)
+      .or('category.eq.home,user_label.ilike.home')
+      .limit(1)
+      .maybeSingle();
+    if (homePlace?.centroid_lat != null) {
+      lat = homePlace.centroid_lat; lon = homePlace.centroid_lon;
+    } else {
+      const { data: anyPlace } = await supabase
+        .from('places')
+        .select('centroid_lat, centroid_lon')
+        .eq('user_id', userId)
+        .not('centroid_lat', 'is', null)
+        .order('visit_count', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (anyPlace?.centroid_lat != null) {
+        lat = anyPlace.centroid_lat; lon = anyPlace.centroid_lon;
+      } else {
+        const { data: ping } = await supabase
+          .from('behavioral_pings')
+          .select('geohash_8')
+          .eq('user_id', userId)
+          .order('captured_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (ping?.geohash_8) {
+          const c = decodeGeohashLite(ping.geohash_8);
+          lat = c.lat; lon = c.lon;
+        }
+      }
+    }
+    if (lat == null || lon == null) {
+      return { ok: false, message: 'No location known yet — cannot fetch a local forecast.' };
+    }
+
+    const res = await fetch(
+      `https://api.openweathermap.org/data/2.5/forecast?lat=${lat}&lon=${lon}&units=metric&appid=${OPENWEATHER_API_KEY}`,
+    );
+    if (!res.ok) {
+      return { ok: false, message: `Weather API error ${res.status}: ${(await res.text()).slice(0, 200)}` };
+    }
+    const data = (await res.json()) as {
+      list?: Array<{
+        dt: number;
+        main?: { temp?: number };
+        weather?: Array<{ description?: string }>;
+        pop?: number;
+        wind?: { speed?: number };
+      }>;
+    };
+
+    const wantedDate = input.date ? String(input.date) : null;
+    const horizonMs = Date.now() + 26 * 3600_000;
+    const lines: string[] = [];
+    for (const step of data.list ?? []) {
+      const when = new Date(step.dt * 1000);
+      const localDate = when.toLocaleDateString('en-CA', { timeZone: userTimezone });
+      if (wantedDate ? localDate !== wantedDate : when.getTime() > horizonMs) continue;
+      const hh = when.toLocaleTimeString('en-US', {
+        timeZone: userTimezone, hour: '2-digit', minute: '2-digit', hour12: false,
+      });
+      lines.push(
+        `${localDate} ${hh}: ${Math.round(step.main?.temp ?? 0)}°C, ${
+          step.weather?.[0]?.description ?? '?'
+        }, rain ${Math.round((step.pop ?? 0) * 100)}%, wind ${Math.round(step.wind?.speed ?? 0)} m/s`,
+      );
+    }
+    if (lines.length === 0) {
+      return { ok: false, message: 'No forecast data for that date (forecast covers ~5 days ahead).' };
+    }
+    return { ok: true, message: `Forecast near home (3h steps):\n${lines.join('\n')}` };
+  }
+
   return { ok: false, message: `Unknown tool: ${name}` };
+}
+
+// Compact geohash decoder (cell center) — same scheme as resolve-places.
+function decodeGeohashLite(hash: string): { lat: number; lon: number } {
+  const B32 = '0123456789bcdefghjkmnpqrstuvwxyz';
+  let evenBit = true;
+  let latMin = -90, latMax = 90, lonMin = -180, lonMax = 180;
+  for (const ch of hash) {
+    const idx = B32.indexOf(ch);
+    if (idx < 0) break;
+    for (let n = 4; n >= 0; n--) {
+      const bit = (idx >> n) & 1;
+      if (evenBit) {
+        const mid = (lonMin + lonMax) / 2;
+        if (bit === 1) lonMin = mid; else lonMax = mid;
+      } else {
+        const mid = (latMin + latMax) / 2;
+        if (bit === 1) latMin = mid; else latMax = mid;
+      }
+      evenBit = !evenBit;
+    }
+  }
+  return { lat: (latMin + latMax) / 2, lon: (lonMin + lonMax) / 2 };
 }
 
 // ---------- helpers -------------------------------------------------------
@@ -1708,11 +2452,15 @@ function toClaudeMessages(rows: ChatRow[]): ClaudeMessage[] {
   for (const row of rows) {
     if (row.role === 'system') continue;
     const claudeRole: 'user' | 'assistant' = row.role === 'user' ? 'user' : 'assistant';
+    // Prefix each message with its date so the model can tell stale "today /
+    // tomorrow" references (sent weeks ago) from current ones.
+    const tag = row.created_at ? `[${row.created_at.slice(0, 10)}] ` : '';
+    const text = tag + row.content;
     const last = out[out.length - 1];
     if (last && last.role === claudeRole && typeof last.content === 'string') {
-      last.content += '\n\n' + row.content;
+      last.content += '\n\n' + text;
     } else {
-      out.push({ role: claudeRole, content: row.content });
+      out.push({ role: claudeRole, content: text });
     }
   }
   while (out.length && out[0].role === 'assistant') out.shift();

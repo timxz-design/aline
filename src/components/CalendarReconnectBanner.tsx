@@ -59,62 +59,31 @@ export function CalendarReconnectBanner({ onStatus }: Props) {
     router.push('/(app)/profile' as never);
   };
 
+  // Deliberately quiet: a one-line muted note, not an alarm box. Sync being
+  // paused is an inconvenience, not an emergency — it shouldn't dominate the
+  // Week tab every morning.
   return (
     <Pressable
       onPress={onTap}
-      style={({ pressed }) => [styles.banner, pressed && { opacity: 0.85 }]}
+      style={({ pressed }) => [styles.banner, pressed && { opacity: 0.7 }]}
+      hitSlop={6}
     >
-      <View style={styles.iconWrap}>
-        <Text style={styles.icon}>⚠</Text>
-      </View>
-      <View style={{ flex: 1 }}>
-        <Text style={styles.title}>Calendar sync paused</Text>
-        <Text style={styles.subtitle}>Google needs you to re-authorize. Tap to reconnect.</Text>
-      </View>
-      <Text style={styles.chevron}>›</Text>
+      <Text style={styles.text} numberOfLines={1}>
+        Calendar sync paused · tap to reconnect
+      </Text>
     </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
   banner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.bgElevated,
-    borderWidth: 1,
-    borderColor: colors.warning,
-    borderRadius: radius.md,
-    paddingVertical: space.sm,
+    alignSelf: 'center',
+    paddingVertical: 4,
     paddingHorizontal: space.md,
-    gap: space.sm,
-    marginHorizontal: space.lg,
-    marginTop: space.sm,
+    marginTop: space.xs,
   },
-  iconWrap: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: 'rgba(251, 191, 36, 0.15)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  icon: {
-    color: colors.warning,
-    fontSize: font.size.md,
-    fontWeight: font.weight.bold,
-  },
-  title: {
-    color: colors.text,
-    fontSize: font.size.sm,
-    fontWeight: font.weight.semibold,
-  },
-  subtitle: {
-    color: colors.textMuted,
-    fontSize: font.size.xs,
-    marginTop: 1,
-  },
-  chevron: {
+  text: {
     color: colors.textDim,
-    fontSize: font.size.lg,
+    fontSize: font.size.xs,
   },
 });

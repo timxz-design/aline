@@ -55,6 +55,18 @@ export type CuriosityItem =
         consistency: number | null;
         last_observed: string | null;
       };
+    }
+  | {
+      kind: 'activity';
+      id: string;
+      payload: {
+        source_kind: 'routine' | 'goal';
+        label: string;
+        place_name: string | null;
+        category: string | null;
+        scheduled_start: string;
+        ambiguity: 'home' | 'skipped' | 'goal';
+      };
     };
 
 async function readLastShownMs(): Promise<number | null> {
@@ -179,12 +191,38 @@ export async function rejectCuriosityItem(
 
 /** "Ask me later" — bumps last_asked_at without changing the inference. */
 export async function snoozeCuriosityItem(
-  kind: 'place' | 'routine',
+  kind: 'place' | 'routine' | 'activity',
   id: string,
 ): Promise<{ error?: string }> {
+  if (kind === 'activity') {
+    const { error } = await supabase
+      .from('activity_log')
+      .update({ last_asked_at: new Date().toISOString() })
+      .eq('id', id);
+    return error ? { error: error.message } : {};
+  }
   const { error } = await supabase.rpc('mark_curiosity_asked', {
     _kind: kind,
     _id: id,
+  });
+  return error ? { error: error.message } : {};
+}
+
+/**
+ * Resolve an activity-occurrence check from the user's answer.
+ *   done      → they did it (auto-reinforces the routine)
+ *   skipped   → they didn't
+ *   elsewhere → did it somewhere other than expected
+ */
+export async function resolveActivityCheck(
+  id: string,
+  result: 'done' | 'skipped' | 'elsewhere',
+  actualLabel?: string,
+): Promise<{ error?: string }> {
+  const { error } = await supabase.rpc('resolve_activity_check', {
+    _id: id,
+    _result: result,
+    _actual_label: actualLabel ?? undefined,
   });
   return error ? { error: error.message } : {};
 }

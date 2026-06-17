@@ -18,6 +18,60 @@ export type Database = {
   }
   public: {
     Tables: {
+      activity_log: {
+        Row: {
+          actual_label: string | null
+          checked_at: string
+          confirmed_by: string | null
+          created_at: string
+          event_id: string | null
+          expected_category: string | null
+          id: string
+          last_asked_at: string | null
+          place_id: string | null
+          result: string
+          scheduled_end: string
+          scheduled_start: string
+          source_id: string | null
+          source_kind: string
+          user_id: string
+        }
+        Insert: {
+          actual_label?: string | null
+          checked_at?: string
+          confirmed_by?: string | null
+          created_at?: string
+          event_id?: string | null
+          expected_category?: string | null
+          id?: string
+          last_asked_at?: string | null
+          place_id?: string | null
+          result: string
+          scheduled_end: string
+          scheduled_start: string
+          source_id?: string | null
+          source_kind: string
+          user_id: string
+        }
+        Update: {
+          actual_label?: string | null
+          checked_at?: string
+          confirmed_by?: string | null
+          created_at?: string
+          event_id?: string | null
+          expected_category?: string | null
+          id?: string
+          last_asked_at?: string | null
+          place_id?: string | null
+          result?: string
+          scheduled_end?: string
+          scheduled_start?: string
+          source_id?: string | null
+          source_kind?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       app_sessions: {
         Row: {
           duration_seconds: number | null
@@ -58,6 +112,7 @@ export type Database = {
           geohash_8: string
           id: string
           motion_state: string | null
+          source: string | null
           user_id: string
         }
         Insert: {
@@ -67,6 +122,7 @@ export type Database = {
           geohash_8: string
           id?: string
           motion_state?: string | null
+          source?: string | null
           user_id: string
         }
         Update: {
@@ -76,6 +132,7 @@ export type Database = {
           geohash_8?: string
           id?: string
           motion_state?: string | null
+          source?: string | null
           user_id?: string
         }
         Relationships: []
@@ -673,6 +730,8 @@ export type Database = {
       places: {
         Row: {
           category: string | null
+          centroid_lat: number | null
+          centroid_lon: number | null
           confidence: number | null
           created_at: string
           first_seen: string
@@ -695,6 +754,8 @@ export type Database = {
         }
         Insert: {
           category?: string | null
+          centroid_lat?: number | null
+          centroid_lon?: number | null
           confidence?: number | null
           created_at?: string
           first_seen?: string
@@ -717,6 +778,8 @@ export type Database = {
         }
         Update: {
           category?: string | null
+          centroid_lat?: number | null
+          centroid_lon?: number | null
           confidence?: number | null
           created_at?: string
           first_seen?: string
@@ -786,6 +849,41 @@ export type Database = {
           updated_at?: string | null
         }
         Relationships: []
+      }
+      reminders: {
+        Row: {
+          content: string
+          created_at: string
+          id: string
+          remind_at: string
+          status: string
+          user_id: string
+        }
+        Insert: {
+          content: string
+          created_at?: string
+          id?: string
+          remind_at: string
+          status?: string
+          user_id: string
+        }
+        Update: {
+          content?: string
+          created_at?: string
+          id?: string
+          remind_at?: string
+          status?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "reminders_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       routines: {
         Row: {
@@ -863,6 +961,10 @@ export type Database = {
         Returns: number
       }
       apply_change_set: { Args: { _id: string }; Returns: Json }
+      resolve_activity_check: {
+        Args: { _id: string; _result: string; _actual_label?: string }
+        Returns: undefined
+      }
       are_friends: { Args: { _a: string; _b: string }; Returns: boolean }
       cancel_hangout: { Args: { _hangout_id: string }; Returns: undefined }
       create_group: {

@@ -10,7 +10,7 @@ import { colors } from '../src/theme';
  *  - auth still loading → spinner
  *  - signed out → /(auth)/sign-in
  *  - signed in but onboarding not complete → /(onboarding)
- *  - signed in and onboarded → /(app)/week
+ *  - signed in and onboarded → /(app)/agent (chat is home)
  *
  * The profile loader gates onboarding routing. We block on profile load to
  * avoid a flash where a fresh user briefly sees the app before being
@@ -28,7 +28,7 @@ export default function Index() {
     return <Redirect href="/(onboarding)" />;
   }
 
-  return <Redirect href="/(app)/week" />;
+  return <Redirect href="/(app)/agent" />;
 }
 
 function Spinner() {
