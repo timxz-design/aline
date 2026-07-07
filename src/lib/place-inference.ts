@@ -76,6 +76,15 @@ export const PLACE_INFERENCE_THRESHOLDS = {
   /** Pings at a "work / school" pattern — weekdays 9-17. */
   work_weekday_business_ratio: 0.5,
   work_min_weekdays: 3,
+  /**
+   * Behavioral "work" also requires meaningful accumulated presence, not just
+   * a few business-hours drive-bys that happen to land on 3 weekdays. Kept a
+   * modest floor (≈1h total over the window): sparse iOS sampling badly
+   * underestimates dwell, so a literal "4+ hours" bar would suppress real
+   * workplaces until geofencing matures. Recurrence (weekdays) carries the
+   * main weight; this just blocks the drive-by false-positive.
+   */
+  work_min_total_dwell_minutes: 60,
   /** Anything below this is too small a sample to label confidently. */
   min_pings_for_inference: 5,
   /** Outing detection: short span + few pings = ignore. */
@@ -195,8 +204,15 @@ export function inferPlaceLabel(input: PlaceInferenceInput): PlaceInferenceResul
 
   const isHomePattern =
     overnightRatio >= T.home_overnight_ratio && distinctDays >= T.home_min_distinct_days;
+  // Lenient when dwell is unknown (recurrence still carries strong evidence);
+  // strict when we have it.
+  const workDwellOk =
+    typeof input.total_dwell_minutes !== 'number' ||
+    input.total_dwell_minutes >= T.work_min_total_dwell_minutes;
   const isWorkPattern =
-    businessRatio >= T.work_weekday_business_ratio && weekdayCount >= T.work_min_weekdays;
+    businessRatio >= T.work_weekday_business_ratio &&
+    weekdayCount >= T.work_min_weekdays &&
+    workDwellOk;
 
   // ---- 1. STRONG time-of-day pattern wins outright -----------------------
   // Home and Work patterns express what the user is ACTUALLY doing at the

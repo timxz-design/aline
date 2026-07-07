@@ -1,14 +1,16 @@
-import { useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as Speech from 'expo-speech';
 import {
   ExpoSpeechRecognitionModule,
   useSpeechRecognitionEvent,
 } from 'expo-speech-recognition';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   KeyboardAvoidingView,
+  Linking,
   Platform,
   Pressable,
   StyleSheet,
@@ -17,6 +19,8 @@ import {
   View,
 } from 'react-native';
 import { AgentChangeSetCard } from '../../src/components/AgentChangeSetCard';
+import { GoalPlanCard } from '../../src/components/GoalPlanCard';
+import { useGoalPlans, commitGoalPlan, type LoadedPlan } from '../../src/lib/use-goal-plans';
 import { DayStrip } from '../../src/components/DayStrip';
 import { Screen } from '../../src/components/Screen';
 import { useAuth } from '../../src/lib/auth-context';
@@ -44,6 +48,7 @@ export default function AgentScreen() {
   const { user } = useAuth();
   const { profile } = useProfile();
   const { seed, focus } = useLocalSearchParams<{ seed?: string; focus?: string }>();
+  const router = useRouter();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   // Id of a message to scroll to + briefly highlight (set when the user taps a
   // proactive notification that deep-links to its chat message).
@@ -55,6 +60,7 @@ export default function AgentScreen() {
   const [error, setError] = useState<string | null>(null);
   const listRef = useRef<FlatList<ChatMessage>>(null);
   const { byMessage: changeSetsByMessage } = useChangeSets();
+  const { byId: plansById } = useGoalPlans();
   const [listening, setListening] = useState(false);
   // When the user spoke their message, speak the reply back (voice in → voice
   // out). A ref so the realtime handler (stable closure) reads the live value.
@@ -252,6 +258,26 @@ export default function AgentScreen() {
     <Screen noPadding>
       <View style={styles.header}>
         <Text style={styles.title}>ALINE</Text>
+        <View style={{ flexDirection: 'row', gap: space.xs }}>
+          <Pressable
+            onPress={() => router.push('/(app)/events')}
+            hitSlop={10}
+            style={({ pressed }) => [styles.goalsBtn, pressed && { opacity: 0.6 }]}
+            accessibilityRole="button"
+            accessibilityLabel="Events"
+          >
+            <Text style={styles.goalsBtnText}>◈ Events</Text>
+          </Pressable>
+          <Pressable
+            onPress={() => router.push('/(app)/goals')}
+            hitSlop={10}
+            style={({ pressed }) => [styles.goalsBtn, pressed && { opacity: 0.6 }]}
+            accessibilityRole="button"
+            accessibilityLabel="Goals"
+          >
+            <Text style={styles.goalsBtnText}>◎ Goals</Text>
+          </Pressable>
+        </View>
       </View>
       <DayStrip />
 
@@ -276,6 +302,7 @@ export default function AgentScreen() {
               <Bubble
                 msg={item}
                 changeSet={changeSetsByMessage[item.id]}
+                plan={item.goal_plan_id ? plansById[item.goal_plan_id] : undefined}
                 highlighted={item.id === highlightId}
                 onPromptDifferentTime={(s) => setDraft(s)}
               />
@@ -375,18 +402,81 @@ const PROACTIVE_LABEL: Record<string, string> = {
   morning: 'Good morning',
 };
 
+/**
+ * Render the agent's lightweight markdown (bold + links) into Text children.
+ * Markdown links [label](url) and bare URLs become tappable; **x** becomes bold.
+ * Wrapped by a `selectable` Text in Bubble so everything is copyable.
+ */
+function renderRich(content: string, isUser: boolean): ReactNode[] {
+  const nodes: ReactNode[] = [];
+  const linkColor = isUser ? colors.textInverse : colors.accent;
+  const re = /\[([^\]]+)\]\(([^)\s]+)\)|\*\*([^*]+)\*\*|(https?:\/\/[^\s)]+)/g;
+  let last = 0;
+  let key = 0;
+  let m: RegExpExecArray | null;
+  const openUrl = (url: string) => { Linking.openURL(url).catch(() => {}); };
+  while ((m = re.exec(content)) !== null) {
+    if (m.index > last) nodes.push(content.slice(last, m.index));
+    if (m[1] !== undefined) {
+      const url = m[2];
+      nodes.push(
+        <Text key={key++} style={[styles.link, { color: linkColor }]} onPress={() => openUrl(url)}>
+          {m[1]}
+        </Text>,
+      );
+    } else if (m[3] !== undefined) {
+      nodes.push(<Text key={key++} style={styles.boldText}>{m[3]}</Text>);
+    } else if (m[4] !== undefined) {
+      const url = m[4];
+      nodes.push(
+        <Text key={key++} style={[styles.link, { color: linkColor }]} onPress={() => openUrl(url)}>
+          {url}
+        </Text>,
+      );
+    }
+    last = re.lastIndex;
+  }
+  if (last < content.length) nodes.push(content.slice(last));
+  return nodes;
+}
+
 function Bubble({
   msg,
   changeSet,
+  plan,
   highlighted,
   onPromptDifferentTime,
 }: {
   msg: ChatMessage;
   changeSet?: PendingChangeSet;
+  plan?: LoadedPlan;
   highlighted?: boolean;
   onPromptDifferentTime?: (s: string) => void;
 }) {
   const isUser = msg.role === 'user';
+  const planCard = plan ? (
+    <View style={styles.planWrap}>
+      <GoalPlanCard
+        title={plan.goalTitle}
+        status={plan.status}
+        spec={plan.spec}
+        onRefine={() => onPromptDifferentTime?.(`Let's tweak my "${plan.goalTitle}" plan: `)}
+        onCommit={async () => {
+          const wasLive = plan.status === 'live';
+          const res = await commitGoalPlan(plan.goal_id);
+          if ('error' in res) {
+            Alert.alert("Couldn't add to schedule", res.error);
+            return;
+          }
+          const skipNote = res.skipped > 0 ? ` (${res.skipped} skipped — clashed)` : '';
+          Alert.alert(
+            wasLive ? 'Plan re-synced' : 'Added to your schedule',
+            `${res.created} session${res.created === 1 ? '' : 's'} placed over the next 2 weeks${skipNote}.`,
+          );
+        }}
+      />
+    </View>
+  ) : null;
   const ed = (msg.extracted_data ?? null) as
     | { proactive?: boolean; kind?: string }
     | null;
@@ -405,7 +495,7 @@ function Bubble({
               <Text style={styles.proactiveLabel}>{label}</Text>
               {time ? <Text style={styles.proactiveTime}>{time}</Text> : null}
             </View>
-            <Text style={styles.bubbleText}>{msg.content}</Text>
+            <Text selectable style={styles.bubbleText}>{renderRich(msg.content, false)}</Text>
           </View>
         </View>
         {changeSet ? (
@@ -414,6 +504,7 @@ function Bubble({
             onPromptDifferentTime={onPromptDifferentTime}
           />
         ) : null}
+        {planCard}
       </View>
     );
   }
@@ -428,8 +519,8 @@ function Bubble({
             highlighted && styles.cardHighlight,
           ]}
         >
-          <Text style={[styles.bubbleText, isUser && styles.bubbleTextUser]}>
-            {msg.content}
+          <Text selectable style={[styles.bubbleText, isUser && styles.bubbleTextUser]}>
+            {renderRich(msg.content, isUser)}
           </Text>
         </View>
       </View>
@@ -439,6 +530,7 @@ function Bubble({
           onPromptDifferentTime={onPromptDifferentTime}
         />
       ) : null}
+      {planCard}
     </View>
   );
 }
@@ -474,6 +566,9 @@ function SuggestionChip({ text }: { text: string }) {
 
 const styles = StyleSheet.create({
   header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     paddingHorizontal: space.lg,
     paddingTop: space.md,
     paddingBottom: space.sm,
@@ -486,11 +581,25 @@ const styles = StyleSheet.create({
     color: colors.text,
     letterSpacing: 1,
   },
+  goalsBtn: {
+    paddingHorizontal: space.md,
+    paddingVertical: space.xs,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.bgElevated,
+  },
+  goalsBtnText: {
+    color: colors.accent,
+    fontSize: font.size.sm,
+    fontWeight: '600',
+  },
   subtitle: {
     color: colors.textMuted,
     fontSize: 12,
     marginTop: 2,
   },
+  planWrap: { marginTop: space.sm },
   kav: { flex: 1 },
   loadingBox: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   messages: { padding: space.lg, paddingBottom: space.xl },
@@ -515,6 +624,8 @@ const styles = StyleSheet.create({
   },
   bubbleText: { color: colors.text, fontSize: 15, lineHeight: 22 },
   bubbleTextUser: { color: colors.textInverse },
+  boldText: { fontWeight: '700' },
+  link: { textDecorationLine: 'underline' },
   proactiveCard: {
     maxWidth: '88%',
     paddingHorizontal: space.md,

@@ -86,11 +86,13 @@ Deno.serve(async (req: Request) => {
   const accessToken = tokenRes.accessToken;
 
   // -------- write-back: push ALINE-origin events to Google BEFORE the pull ----
-  // Inferred blocks (routine/transit) stay local — we never pollute the user's
-  // real calendar with guesses. Concrete ALINE events (fixed/goal/flexible/
-  // coordinated) get created or updated in Google. Round-trip duplication is
-  // prevented by keeping source='aline' and storing the Google id in
-  // external_id; the pull below SKIPS any Google event already claimed by an
+  // Inferred/recurring agent blocks (routine/transit/goal) stay local — we never
+  // pollute the user's real calendar with guesses or recurring goal sessions
+  // (and goal blocks are re-materialized/edited locally, so syncing them would
+  // orphan Google copies on every regenerate). Concrete one-off ALINE events
+  // (fixed/flexible/coordinated) get created or updated in Google. Round-trip
+  // duplication is prevented by keeping source='aline' and storing the Google id
+  // in external_id; the pull below SKIPS any Google event already claimed by an
   // aline row.
   try {
     const pushMin = new Date(Date.now() - WINDOW_BACK_DAYS * 86400_000).toISOString();
@@ -100,7 +102,7 @@ Deno.serve(async (req: Request) => {
       .select('id, external_id, title, description, start_at, end_at, location, updated_at, google_synced_at')
       .eq('user_id', user.id)
       .eq('source', 'aline')
-      .not('event_type', 'in', '(routine,transit)')
+      .not('event_type', 'in', '(routine,transit,goal)')
       .gte('start_at', pushMin)
       .lt('start_at', pushMax);
 

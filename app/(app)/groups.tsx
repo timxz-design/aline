@@ -693,7 +693,7 @@ function CreateGroupModal({
     setSubmitting(true);
     const { error } = await supabase.rpc('create_group', {
       _name: name.trim(),
-      _description: description.trim() || null,
+      _description: description.trim() || undefined,
     });
     setSubmitting(false);
     if (error) {

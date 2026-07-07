@@ -7,7 +7,18 @@ export type FriendProfile = {
   handle: string | null;
   first_name: string | null;
   display_name: string | null;
+  /** The tier the CURRENT user grants this friend ('inner' = full sharing). */
+  myTier: 'friend' | 'inner';
 };
+
+/** Set the current user's trust tier toward a friend. */
+export async function setFriendTier(
+  otherUserId: string,
+  tier: 'friend' | 'inner',
+): Promise<{ error?: string }> {
+  const { error } = await supabase.rpc('set_friend_tier', { _other_user: otherUserId, _tier: tier });
+  return error ? { error: error.message } : {};
+}
 
 export type PendingRequest = {
   /** The other user's profile (the one who sent the request to me, OR I sent it to). */
@@ -50,7 +61,7 @@ export function useFriends(): Result {
 
     const { data: rows, error } = await supabase
       .from('friendships')
-      .select('user_a, user_b, status, requested_by, updated_at')
+      .select('user_a, user_b, status, requested_by, updated_at, tier_a, tier_b')
       .or(`user_a.eq.${user.id},user_b.eq.${user.id}`);
 
     if (error) {
@@ -66,13 +77,14 @@ export function useFriends(): Result {
       otherIds.add(r.user_a === user.id ? r.user_b : r.user_a);
     }
 
-    let profilesById = new Map<string, FriendProfile>();
+    type BaseProfile = Omit<FriendProfile, 'myTier'>;
+    let profilesById = new Map<string, BaseProfile>();
     if (otherIds.size > 0) {
       const { data: profs } = await supabase
         .from('profiles')
         .select('id, handle, first_name, display_name')
         .in('id', Array.from(otherIds));
-      profilesById = new Map((profs ?? []).map((p) => [p.id, p as FriendProfile]));
+      profilesById = new Map((profs ?? []).map((p) => [p.id, p as BaseProfile]));
     }
 
     const fr: FriendProfile[] = [];
@@ -82,9 +94,10 @@ export function useFriends(): Result {
       const profile = profilesById.get(otherId);
       if (!profile) continue;
       if (r.status === 'accepted') {
-        fr.push(profile);
+        const rawTier = r.user_a === user.id ? r.tier_a : r.tier_b;
+        fr.push({ ...profile, myTier: rawTier === 'inner' ? 'inner' : 'friend' });
       } else if (r.status === 'pending') {
-        pen.push({ user: profile, outbound: r.requested_by === user.id });
+        pen.push({ user: { ...profile, myTier: 'friend' }, outbound: r.requested_by === user.id });
       }
     }
     fr.sort((a, b) =>

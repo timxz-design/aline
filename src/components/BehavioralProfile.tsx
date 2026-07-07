@@ -19,7 +19,6 @@ import {
   Text,
   TextInput,
   View,
-  type ViewStyle,
 } from 'react-native';
 import { decodeGeohash } from '../lib/clustering';
 import { colors, font, radius, space } from '../theme';
@@ -116,24 +115,10 @@ export function BehavioralProfile() {
 
   return (
     <View style={{ gap: space.md }}>
-      {/* Archetype card — gated by data_quality='high'. The sleep portion
-          comes from app_sessions (when the user opened ALINE) which is a
-          reliable proxy for "awake." We only surface it once we have ≥7
-          days of session data; before that, sleep stats would swing wildly. */}
-      {summary?.archetype_text && summary?.data_quality === 'high' ? (
-        <View style={styles.archetypeCard}>
-          <Text style={styles.archetypeLabel}>Archetype</Text>
-          <Text style={styles.archetypeText}>{summary.archetype_text}</Text>
-          <View style={styles.archetypeMetaRow}>
-            <DataQualityBadge quality={summary.data_quality} />
-            {summary.waketime_minute != null && summary.bedtime_minute != null ? (
-              <Text style={styles.archetypeMetaText}>
-                Sleep window: {formatMinute(summary.waketime_minute)}–{formatMinute(summary.bedtime_minute)}
-              </Text>
-            ) : null}
-          </View>
-        </View>
-      ) : null}
+      {/* Archetype/chronotype card removed for now — labelling a person by their
+          sleep pattern is weak signal. The underlying wake/sleep inference is
+          kept (the agent still uses it for scheduling), just not surfaced as a
+          label. Revisit once we can group people on stronger criteria. */}
 
       {/* Places */}
       {places.length > 0 ? (
@@ -406,20 +391,6 @@ function Badge({ label, muted }: { label: string; muted?: boolean }) {
   return (
     <View style={[styles.badge, muted && styles.badgeMuted]}>
       <Text style={[styles.badgeText, muted && styles.badgeTextMuted]}>{label}</Text>
-    </View>
-  );
-}
-
-function DataQualityBadge({ quality }: { quality: 'none' | 'low' | 'medium' | 'high' }) {
-  const labelColor: Record<string, ViewStyle['backgroundColor']> = {
-    none: colors.bgRaised,
-    low: colors.accent2Dim,
-    medium: colors.accent2Dim,
-    high: colors.accentDim,
-  };
-  return (
-    <View style={[styles.badge, { backgroundColor: labelColor[quality] }]}>
-      <Text style={styles.badgeText}>{quality} data</Text>
     </View>
   );
 }

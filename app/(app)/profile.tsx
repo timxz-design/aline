@@ -20,7 +20,7 @@ import { Screen } from '../../src/components/Screen';
 import { useAuth } from '../../src/lib/auth-context';
 import { OPENNESS_OPTIONS, type SocialOpenness } from '../../src/lib/onboarding-data';
 import { supabase } from '../../src/lib/supabase';
-import { useFriends, type FriendProfile, type PendingRequest } from '../../src/lib/use-friends';
+import { useFriends, setFriendTier, type FriendProfile, type PendingRequest } from '../../src/lib/use-friends';
 import { useProfile } from '../../src/lib/use-profile';
 import type { Goal, Interest } from '../../src/types/database';
 import { colors, font, radius, space } from '../../src/theme';
@@ -96,14 +96,15 @@ export default function ProfileScreen() {
   );
 
   const deleteGoal = useCallback(
-    (id: string, title: string) => {
+    (ids: string[], title: string) => {
       Alert.alert('Delete goal?', `"${title}" will be removed.`, [
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Delete',
           style: 'destructive',
           onPress: async () => {
-            const { error } = await supabase.from('goals').delete().eq('id', id);
+            // Remove every stored version of this goal, not just the latest row.
+            const { error } = await supabase.from('goals').delete().in('id', ids);
             if (error) Alert.alert('Failed', error.message);
             else loadFacts();
           },
@@ -112,6 +113,11 @@ export default function ProfileScreen() {
     },
     [loadFacts],
   );
+
+  // Collapse repeated goals into one row each (newest kept for display), but
+  // keep every version's id + a last-changed timestamp so the history isn't
+  // lost and the user can see when a goal shifted.
+  const goalRows = dedupeGoals(goals);
 
   const startEditName = () => {
     setNameDraft(profile?.first_name ?? '');
@@ -286,35 +292,38 @@ export default function ProfileScreen() {
         </Section>
 
         {/* What I know */}
-        <Section title="What ALINE knows about you">
+        <Section title="Goals & preferences">
           <Text style={styles.subtleNote}>
             Built from what you've told the agent. You can correct anything by
             chatting with ALINE — "I don't actually run anymore", "drop the
             morning thing".
           </Text>
 
-          <Subsection label={`Goals (${goals.length})`}>
-            {goals.length === 0 ? (
+          <Subsection label={`Goals (${goalRows.length})`}>
+            {goalRows.length === 0 ? (
               <Text style={styles.emptyText}>None yet.</Text>
             ) : (
-              goals.map((g) => (
-                <View key={g.id} style={[styles.factRow, styles.factRowWithAction]}>
-                  <View style={{ flex: 1, gap: 2 }}>
-                    <Text style={styles.factPrimary}>{g.title}</Text>
-                    <Text style={styles.factMeta}>
-                      {g.category ?? 'general'}
-                      {g.is_aspirational ? ' · aspirational' : ''} · {g.status}
-                    </Text>
+              goalRows.map(({ goal: g, ids, versions }) => {
+                const when = formatWhen(g.updated_at ?? g.created_at);
+                const meta = [when, versions > 1 ? `${versions} versions` : '']
+                  .filter(Boolean)
+                  .join(' · ');
+                return (
+                  <View key={g.id} style={[styles.factRow, styles.factRowWithAction]}>
+                    <View style={{ flex: 1, gap: 2 }}>
+                      <Text style={styles.factPrimary}>{g.title}</Text>
+                      {meta ? <Text style={styles.factMeta}>{meta}</Text> : null}
+                    </View>
+                    <Pressable
+                      onPress={() => deleteGoal(ids, g.title)}
+                      hitSlop={10}
+                      style={styles.deleteBtn}
+                    >
+                      <Text style={styles.deleteBtnText}>✕</Text>
+                    </Pressable>
                   </View>
-                  <Pressable
-                    onPress={() => deleteGoal(g.id, g.title)}
-                    hitSlop={10}
-                    style={styles.deleteBtn}
-                  >
-                    <Text style={styles.deleteBtnText}>✕</Text>
-                  </Pressable>
-                </View>
-              ))
+                );
+              })
             )}
           </Subsection>
 
@@ -437,7 +446,25 @@ function FriendRow({
           {friend.handle ? (
             <Text style={styles.friendHandle}>@{friend.handle}</Text>
           ) : null}
+          {friend.myTier === 'inner' ? (
+            <Text style={styles.innerCircleLabel}>Inner circle · shares your full schedule</Text>
+          ) : null}
         </View>
+        <Pressable
+          onPress={async () => {
+            const next = friend.myTier === 'inner' ? 'friend' : 'inner';
+            const { error } = await setFriendTier(friend.id, next);
+            if (error) { Alert.alert('Could not update', error); return; }
+            onUnfriended(); // refresh the friend list
+          }}
+          hitSlop={10}
+          style={styles.tierToggle}
+          accessibilityLabel={friend.myTier === 'inner' ? 'Remove from inner circle' : 'Add to inner circle'}
+        >
+          <Text style={[styles.tierStar, friend.myTier === 'inner' && styles.tierStarOn]}>
+            {friend.myTier === 'inner' ? '★' : '☆'}
+          </Text>
+        </Pressable>
       </View>
     </Swipeable>
   );
@@ -554,6 +581,42 @@ function Subsection({
       <Text style={styles.subsectionLabel}>{label}</Text>
       <View style={{ gap: 4 }}>{children}</View>
     </View>
+  );
+}
+
+/** Collapse repeated goals (same title) into one display row.
+ *  Goals arrive newest-first, so the first row seen for a title is the one we
+ *  keep to display; the rest are folded in. We hold onto every version's id
+ *  (so delete removes the whole history) and a count of how many times the
+ *  goal has been restated — the "versions" the user can eyeball for change. */
+function dedupeGoals(
+  goals: Goal[],
+): { goal: Goal; ids: string[]; versions: number }[] {
+  const byTitle = new Map<string, { goal: Goal; ids: string[]; versions: number }>();
+  for (const g of goals) {
+    const key = g.title.trim().toLowerCase();
+    const existing = byTitle.get(key);
+    if (existing) {
+      existing.ids.push(g.id);
+      existing.versions += 1;
+    } else {
+      byTitle.set(key, { goal: g, ids: [g.id], versions: 1 });
+    }
+  }
+  return [...byTitle.values()];
+}
+
+/** Compact "when" stamp — when ALINE last recorded or changed this goal. */
+function formatWhen(iso: string | null): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  const sameYear = d.getFullYear() === new Date().getFullYear();
+  return d.toLocaleDateString(
+    undefined,
+    sameYear
+      ? { month: 'short', day: 'numeric' }
+      : { month: 'short', day: 'numeric', year: 'numeric' },
   );
 }
 
@@ -787,6 +850,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   friendAvatarText: { color: colors.text, fontSize: 14, fontWeight: '700' },
+  innerCircleLabel: { color: colors.accent, fontSize: 11, fontWeight: '600', marginTop: 2 },
+  tierToggle: { paddingHorizontal: space.xs, paddingVertical: space.xs },
+  tierStar: { fontSize: 20, color: colors.textDim },
+  tierStarOn: { color: colors.accent },
   friendName: { color: colors.text, fontSize: 14, fontWeight: '600' },
   friendHandle: { color: colors.textMuted, fontSize: 12 },
   unfriendAction: {

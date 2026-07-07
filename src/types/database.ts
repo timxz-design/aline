@@ -180,6 +180,9 @@ export type Database = {
           end_at: string
           event_type: string | null
           external_id: string | null
+          goal_id: string | null
+          goal_plan_id: string | null
+          google_synced_at: string | null
           hangout_id: string | null
           id: string
           is_movable: boolean
@@ -197,6 +200,9 @@ export type Database = {
           end_at: string
           event_type?: string | null
           external_id?: string | null
+          goal_id?: string | null
+          goal_plan_id?: string | null
+          google_synced_at?: string | null
           hangout_id?: string | null
           id?: string
           is_movable?: boolean
@@ -214,6 +220,9 @@ export type Database = {
           end_at?: string
           event_type?: string | null
           external_id?: string | null
+          goal_id?: string | null
+          goal_plan_id?: string | null
+          google_synced_at?: string | null
           hangout_id?: string | null
           id?: string
           is_movable?: boolean
@@ -292,6 +301,7 @@ export type Database = {
           context_snapshot: Json | null
           created_at: string | null
           extracted_data: Json | null
+          goal_plan_id: string | null
           id: string
           input_tokens: number | null
           model: string | null
@@ -304,6 +314,7 @@ export type Database = {
           context_snapshot?: Json | null
           created_at?: string | null
           extracted_data?: Json | null
+          goal_plan_id?: string | null
           id?: string
           input_tokens?: number | null
           model?: string | null
@@ -316,6 +327,7 @@ export type Database = {
           context_snapshot?: Json | null
           created_at?: string | null
           extracted_data?: Json | null
+          goal_plan_id?: string | null
           id?: string
           input_tokens?: number | null
           model?: string | null
@@ -333,11 +345,132 @@ export type Database = {
           },
         ]
       }
+      events: {
+        Row: {
+          category: string | null
+          created_at: string
+          created_by: string
+          description: string | null
+          ends_at: string | null
+          id: string
+          last_seen_at: string
+          lat: number | null
+          lon: number | null
+          price_text: string | null
+          source: string
+          source_id: string | null
+          starts_at: string
+          status: string
+          title: string
+          updated_at: string
+          url: string | null
+          venue_id: string | null
+          venue_text: string | null
+          visibility: string
+        }
+        Insert: {
+          category?: string | null
+          created_at?: string
+          created_by: string
+          description?: string | null
+          ends_at?: string | null
+          id?: string
+          last_seen_at?: string
+          lat?: number | null
+          lon?: number | null
+          price_text?: string | null
+          source?: string
+          source_id?: string | null
+          starts_at: string
+          status?: string
+          title: string
+          updated_at?: string
+          url?: string | null
+          venue_id?: string | null
+          venue_text?: string | null
+          visibility?: string
+        }
+        Update: {
+          category?: string | null
+          created_at?: string
+          created_by?: string
+          description?: string | null
+          ends_at?: string | null
+          id?: string
+          last_seen_at?: string
+          lat?: number | null
+          lon?: number | null
+          price_text?: string | null
+          source?: string
+          source_id?: string | null
+          starts_at?: string
+          status?: string
+          title?: string
+          updated_at?: string
+          url?: string | null
+          venue_id?: string | null
+          venue_text?: string | null
+          visibility?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "events_venue_id_fkey"
+            columns: ["venue_id"]
+            isOneToOne: false
+            referencedRelation: "venues"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      venues: {
+        Row: {
+          address: string | null
+          category: string | null
+          claimed_by: string | null
+          created_at: string
+          created_by: string | null
+          google_place_id: string | null
+          id: string
+          lat: number | null
+          lon: number | null
+          name: string
+          updated_at: string
+        }
+        Insert: {
+          address?: string | null
+          category?: string | null
+          claimed_by?: string | null
+          created_at?: string
+          created_by?: string | null
+          google_place_id?: string | null
+          id?: string
+          lat?: number | null
+          lon?: number | null
+          name: string
+          updated_at?: string
+        }
+        Update: {
+          address?: string | null
+          category?: string | null
+          claimed_by?: string | null
+          created_at?: string
+          created_by?: string | null
+          google_place_id?: string | null
+          id?: string
+          lat?: number | null
+          lon?: number | null
+          name?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       friendships: {
         Row: {
           created_at: string | null
           requested_by: string | null
           status: string
+          tier_a: string
+          tier_b: string
           updated_at: string | null
           user_a: string
           user_b: string
@@ -346,6 +479,8 @@ export type Database = {
           created_at?: string | null
           requested_by?: string | null
           status: string
+          tier_a?: string
+          tier_b?: string
           updated_at?: string | null
           user_a: string
           user_b: string
@@ -354,6 +489,8 @@ export type Database = {
           created_at?: string | null
           requested_by?: string | null
           status?: string
+          tier_a?: string
+          tier_b?: string
           updated_at?: string | null
           user_a?: string
           user_b?: string
@@ -378,6 +515,56 @@ export type Database = {
             columns: ["user_b"]
             isOneToOne: false
             referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      goal_plans: {
+        Row: {
+          committed_at: string | null
+          created_at: string
+          goal_id: string
+          id: string
+          plan_spec: Json
+          prev_spec: Json | null
+          rationale: string | null
+          status: string
+          updated_at: string
+          user_id: string
+          version: number
+        }
+        Insert: {
+          committed_at?: string | null
+          created_at?: string
+          goal_id: string
+          id?: string
+          plan_spec?: Json
+          prev_spec?: Json | null
+          rationale?: string | null
+          status?: string
+          updated_at?: string
+          user_id: string
+          version?: number
+        }
+        Update: {
+          committed_at?: string | null
+          created_at?: string
+          goal_id?: string
+          id?: string
+          plan_spec?: Json
+          prev_spec?: Json | null
+          rationale?: string | null
+          status?: string
+          updated_at?: string
+          user_id?: string
+          version?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "goal_plans_goal_id_fkey"
+            columns: ["goal_id"]
+            isOneToOne: false
+            referencedRelation: "goals"
             referencedColumns: ["id"]
           },
         ]
@@ -747,6 +934,7 @@ export type Database = {
           name: string | null
           ping_count: number
           primary_type: string | null
+          total_dwell_minutes: number | null
           updated_at: string
           user_id: string
           user_label: string | null
@@ -771,6 +959,7 @@ export type Database = {
           name?: string | null
           ping_count?: number
           primary_type?: string | null
+          total_dwell_minutes?: number | null
           updated_at?: string
           user_id: string
           user_label?: string | null
@@ -795,6 +984,7 @@ export type Database = {
           name?: string | null
           ping_count?: number
           primary_type?: string | null
+          total_dwell_minutes?: number | null
           updated_at?: string
           user_id?: string
           user_label?: string | null
@@ -967,6 +1157,7 @@ export type Database = {
       }
       are_friends: { Args: { _a: string; _b: string }; Returns: boolean }
       cancel_hangout: { Args: { _hangout_id: string }; Returns: undefined }
+      commit_goal_plan: { Args: { _goal_id: string }; Returns: Json }
       create_group: {
         Args: { _description?: string; _group_type?: string; _name: string }
         Returns: string
@@ -1008,6 +1199,7 @@ export type Database = {
         Args: { _id: string; _kind: string }
         Returns: undefined
       }
+      mark_goal_done: { Args: { _goal_id: string; _date?: string }; Returns: Json }
       next_curiosity_item: {
         Args: never
         Returns: {
@@ -1082,6 +1274,7 @@ export type Database = {
         }
         Returns: undefined
       }
+      set_friend_tier: { Args: { _other_user: string; _tier: string }; Returns: undefined }
       set_handle: { Args: { _handle: string }; Returns: undefined }
       set_push_token: { Args: { _token: string }; Returns: undefined }
       shares_group_with: { Args: { _other_user: string }; Returns: boolean }
@@ -1242,6 +1435,8 @@ export type GroupMember = Database["public"]["Tables"]["group_members"]["Row"]
 export type Friendship = Database["public"]["Tables"]["friendships"]["Row"]
 export type ChatMessage = Database["public"]["Tables"]["chat_messages"]["Row"]
 export type Goal = Database["public"]["Tables"]["goals"]["Row"]
+export type GoalPlan = Database["public"]["Tables"]["goal_plans"]["Row"]
+export type LocalEvent = Database["public"]["Tables"]["events"]["Row"]
 export type Interest = Database["public"]["Tables"]["interests"]["Row"]
 export type ChangeSet = Database["public"]["Tables"]["change_sets"]["Row"]
 export type BehavioralPing = Database["public"]["Tables"]["behavioral_pings"]["Row"]
@@ -1271,6 +1466,7 @@ export type ChangeSetCreateOp = {
   location?: string;
   hangout_id?: string;
   goal_id?: string;
+  goal_plan_id?: string;
   reasoning?: string;
 };
 

@@ -138,27 +138,43 @@ export function inferSleep(input: SleepInferenceInput): SleepInferenceResult {
   const bedMinutes: number[] = [];
   const daysSeen = new Set<string>();
 
-  for (let i = 0; i < ann.length; i++) {
-    const cur = ann[i];
-    daysSeen.add(cur.day);
+  // Annotate each session with its gap to the previous / next session (global
+  // ordering), then group by local day. Taking ONE wake + ONE bedtime per day
+  // is the key correctness fix: the old version flagged EVERY session after a
+  // ≥4h gap, so an ordinary midday app-gap (open at 9, next at 13:00) was
+  // misread as "waking up" and dragged the wake median into the afternoon.
+  const withGaps = ann.map((a, i) => ({
+    ...a,
+    prevGap: i > 0 ? a.ts - ann[i - 1].ts : Infinity,
+    nextGap: i < ann.length - 1 ? ann[i + 1].ts - a.ts : Infinity,
+  }));
 
-    const prevGap = i > 0 ? cur.ts - ann[i - 1].ts : Infinity;
-    const nextGap = i < ann.length - 1 ? ann[i + 1].ts - cur.ts : Infinity;
+  const byDay = new Map<string, typeof withGaps>();
+  for (const a of withGaps) {
+    const list = byDay.get(a.day);
+    if (list) list.push(a);
+    else byDay.set(a.day, [a]);
+  }
 
-    // Wake: first session after a long gap
-    if (prevGap >= gapMs && cur.minute >= T.earliest_wake_hour * 60) {
-      wakeMinutes.push(cur.minute);
-    }
+  for (const [day, list] of byDay) {
+    daysSeen.add(day);
 
-    // Bedtime: last session before a long gap. "Before bedtime_hour" wraps
-    // through midnight: accept any minute >= 18:00 OR < 03:00.
-    if (nextGap >= gapMs) {
-      const isLateEvening = cur.minute >= 18 * 60;
-      const isPastMidnight = cur.minute < T.latest_bedtime_hour * 60;
-      if (isLateEvening || isPastMidnight) {
-        bedMinutes.push(cur.minute);
-      }
-    }
+    // Wake = the FIRST open of the day that's past earliest_wake_hour AND
+    // follows a real (≥gap) overnight break. `list` is ascending, so find()
+    // returns the earliest qualifier — one per day.
+    const wake = list.find(
+      (a) => a.minute >= T.earliest_wake_hour * 60 && a.prevGap >= gapMs,
+    );
+    if (wake) wakeMinutes.push(wake.minute);
+
+    // Bedtime = the LAST evening/night open before a ≥gap break (wraps midnight:
+    // minute >= 18:00 OR < 03:00). One per day.
+    const beds = list.filter(
+      (a) =>
+        a.nextGap >= gapMs &&
+        (a.minute >= 18 * 60 || a.minute < T.latest_bedtime_hour * 60),
+    );
+    if (beds.length > 0) bedMinutes.push(beds[beds.length - 1].minute);
   }
 
   const days_observed = daysSeen.size;
@@ -176,7 +192,10 @@ export function inferSleep(input: SleepInferenceInput): SleepInferenceResult {
   if (waketime_minute !== null && bedtime_minute !== null) {
     const earlyWake = waketime_minute < 7 * 60;
     const earlyBed = bedtime_minute < 23 * 60 && bedtime_minute >= 12 * 60;
-    const lateWake = waketime_minute > 9 * 60 + 30;
+    // First app-open LAGS true wake (people wake, then open the app a while
+    // later), so the "late riser" cutoff is generous — ~10:30 first-open, not
+    // 9:30 — to avoid over-labelling ordinary mornings as night-owl.
+    const lateWake = waketime_minute > 10 * 60 + 30;
     const lateBed = bedtime_minute < 4 * 60; // past midnight (00:00-03:59)
     if (earlyWake && earlyBed) chronotype = 'early_bird';
     else if (lateWake || lateBed) chronotype = 'night_owl';

@@ -203,6 +203,9 @@ export default function AppLayout() {
           tabBarIcon: ({ focused }) => <TabIcon symbol="◐" focused={focused} />,
         }}
       />
+      {/* Goals + Events are reached from the agent header, not the tab bar. */}
+      <Tabs.Screen name="goals" options={{ href: null }} />
+      <Tabs.Screen name="events" options={{ href: null }} />
     </Tabs>
   );
 }

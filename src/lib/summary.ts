@@ -66,7 +66,10 @@ export async function recomputeBehavioralSummaryForCurrentUser(): Promise<{
 
   const pings = pingsRes.data ?? [];
   const places = placesRes.data ?? [];
-  const routines = routinesRes.data ?? [];
+  const routines = (routinesRes.data ?? []).map((r) => ({
+    category: r.category,
+    consistency: r.consistency ?? 0,
+  }));
   const sessions = sessionsRes.data ?? [];
   const timezone =
     (profileRes.data as { timezone: string | null } | null)?.timezone ?? 'UTC';

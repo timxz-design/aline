@@ -32,12 +32,21 @@ import {
   type PlaceInferencePing,
 } from './place-inference';
 import { supabase } from './supabase';
+import type { TablesUpdate } from '../types/database';
 
 const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL;
 
 const PING_WINDOW_DAYS = 30;
 const EPSILON_METERS = 100;
 const MIN_PINGS = 5;
+/**
+ * A cluster entry only counts as a "visit" if the user actually stopped this
+ * long. Drive-bys (passing within the radius on a commute) have ~0 dwell and
+ * must NOT inflate visit_count — that's what made a barely-visited office rank
+ * near home. Sparse iOS sampling can under-count genuine brief stops; geofence
+ * ENTER events (high-certainty arrivals) backfill those as geofencing matures.
+ */
+const MIN_VISIT_DWELL_SECONDS = 120;
 
 type RawPing = { captured_at: string; geohash_8: string };
 
@@ -46,8 +55,9 @@ export type ClusterPlaceRow = {
   geohash5: string;
   centroidLat: number;
   centroidLon: number;
-  visitCount: number;        // real session count (entry transitions)
-  pingCount: number;          // raw assigned pings
+  visitCount: number;        // dwell-qualified session count (real stops only)
+  pingCount: number;          // raw assigned pings (cluster extent, not significance)
+  totalDwellMinutes: number;  // sum of intra-visit dwell — the significance signal
   firstSeen: string;
   lastSeen: string;
   // From inferPlaceLabel — we still write these even though they may be
@@ -82,7 +92,11 @@ function countVisitsAndDwell(
 
   const closeOpenVisit = () => {
     if (openCluster >= 0) {
-      dwellSeconds[openCluster] += Math.max(0, (lastInClusterMs - visitStartMs) / 1000);
+      const dwell = Math.max(0, (lastInClusterMs - visitStartMs) / 1000);
+      dwellSeconds[openCluster] += dwell;
+      // Dwell-gate: a visit counts only if the user actually stopped. A single-
+      // ping / sub-threshold transition is a drive-by, not a visit.
+      if (dwell >= MIN_VISIT_DWELL_SECONDS) visits[openCluster]++;
     }
     openCluster = -1;
   };
@@ -104,7 +118,7 @@ function countVisitsAndDwell(
       openCluster = curr;
       visitStartMs = t;
       lastInClusterMs = t;
-      visits[curr]++;
+      // visit count is decided at close (dwell-gated), not on entry
     } else {
       // Continuing inside the same cluster — just extend the open visit.
       lastInClusterMs = t;
@@ -206,6 +220,7 @@ export async function recomputePlacesForCurrentUser(): Promise<{
       centroidLon: lon,
       visitCount: visitCounts[ci] ?? 0,
       pingCount: c.indices.length,
+      totalDwellMinutes,
       firstSeen: memberTimes[0]!,
       lastSeen: memberTimes[memberTimes.length - 1]!,
       inferredName: inference.name,
@@ -252,9 +267,10 @@ export async function recomputePlacesForCurrentUser(): Promise<{
         prior.inference_status === 'corrected' ||
         (prior as { user_label?: string | null }).user_label != null;
 
-      const update: Record<string, unknown> = {
+      const update: TablesUpdate<'places'> = {
         visit_count: row.visitCount,
         ping_count: row.pingCount,
+        total_dwell_minutes: row.totalDwellMinutes,
         last_seen: row.lastSeen,
         first_seen: prior.first_seen ?? row.firstSeen,
         centroid_lat: row.centroidLat,
@@ -289,6 +305,7 @@ export async function recomputePlacesForCurrentUser(): Promise<{
         centroid_lon: row.centroidLon,
         visit_count: row.visitCount,
         ping_count: row.pingCount,
+        total_dwell_minutes: row.totalDwellMinutes,
         first_seen: row.firstSeen,
         last_seen: row.lastSeen,
         name: row.inferredName,

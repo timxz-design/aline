@@ -72,8 +72,13 @@ function categorize(primaryType: string | null): string {
   if (!primaryType) return 'other';
   const t = primaryType.toLowerCase();
 
-  // home / residence
-  if (/(apartment|home_goods|housing|residence)/.test(t)) return 'home';
+  // NOTE: 'home' and 'work' are NEVER assigned from a Google venue type. They
+  // are behavioral identities ("where YOU sleep / work"), set only by
+  // inferPlaceLabel's time-of-day pattern (overnight presence; recurring
+  // weekday business-hours dwell). A residence or corporate office that Google
+  // happens to find near a drive-by must not become the user's home/work.
+  // Home-goods stores fall through to 'shopping' (they contain 'store');
+  // residences/offices fall through to 'other'.
 
   // food
   if (/(restaurant|cafe|coffee|bakery|bar|food|meal|fast_food|pub)/.test(t)) return 'food';
@@ -83,9 +88,6 @@ function categorize(primaryType: string | null): string {
 
   // education
   if (/(school|university|college|library|study)/.test(t)) return 'education';
-
-  // work
-  if (/(office|coworking|corporate)/.test(t)) return 'work';
 
   // shopping
   if (/(store|shop|market|grocery|supermarket|mall|department)/.test(t)) return 'shopping';
@@ -345,7 +347,11 @@ Deno.serve(async (req: Request) => {
 
       const name = hit.displayName?.text ?? null;
       const primaryType = hit.primaryType ?? null;
-      const category = categorize(primaryType);
+      // Defense-in-depth: behavioral categories are never sourced from Google.
+      // categorize() no longer returns these, but clamp anyway so a future
+      // regression can't reintroduce "drive-by office → work".
+      let category = categorize(primaryType);
+      if (category === 'home' || category === 'work') category = 'other';
       const sensitive = isSensitive(primaryType, hit.types ?? []);
 
       // Preserve Home / Work labels from time-of-day inference, and any

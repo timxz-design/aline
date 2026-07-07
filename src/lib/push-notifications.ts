@@ -109,7 +109,9 @@ export async function registerForPushNotifications(): Promise<string | null> {
  */
 export async function deregisterPushToken(): Promise<void> {
   try {
-    await supabase.rpc('set_push_token', { _token: null });
+    // The SQL function accepts null to clear the token, but the generated arg
+    // type is non-null `string`; cast to satisfy it without weakening the type.
+    await supabase.rpc('set_push_token', { _token: null as unknown as string });
   } catch (e) {
     console.warn('[push] deregister failed:', e);
   }
