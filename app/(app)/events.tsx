@@ -15,6 +15,7 @@ import { BackChevron } from '../../src/components/BackChevron';
 import { Screen } from '../../src/components/Screen';
 import { useAuth } from '../../src/lib/auth-context';
 import { supabase } from '../../src/lib/supabase';
+import { ImageViewer } from '../../src/components/ImageViewer';
 import { colors, font, radius, space } from '../../src/theme';
 import type { LocalEvent } from '../../src/types/database';
 
@@ -37,6 +38,7 @@ export default function EventsScreen() {
   const [events, setEvents] = useState<LocalEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [viewerUri, setViewerUri] = useState<string | null>(null);
   // event_id → calendar_event_id for events already on the user's calendar.
   const [goingMap, setGoingMap] = useState<Record<string, string>>({});
 
@@ -211,6 +213,7 @@ export default function EventsScreen() {
                       onGo={() => goToEvent(e)}
                       onUnGo={(calId) => unGoEvent(e, calId)}
                       onCancel={() => cancelOwn(e)}
+                      onImagePress={setViewerUri}
                     />
                   ))}
                 </View>
@@ -231,6 +234,8 @@ export default function EventsScreen() {
           </Text>
         </ScrollView>
       )}
+
+      <ImageViewer uri={viewerUri} onClose={() => setViewerUri(null)} />
     </Screen>
   );
 }
@@ -244,6 +249,7 @@ function EventRow({
   onGo,
   onUnGo,
   onCancel,
+  onImagePress,
 }: {
   event: LocalEvent;
   mine: boolean;
@@ -253,6 +259,7 @@ function EventRow({
   onGo: () => void;
   onUnGo: (calendarEventId: string) => void;
   onCancel: () => void;
+  onImagePress: (uri: string) => void;
 }) {
   const start = new Date(e.starts_at);
   const time = start.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
@@ -283,11 +290,15 @@ function EventRow({
     <Pressable onPress={onToggle} style={({ pressed }) => [pressed && { opacity: 0.9 }]}>
       <View style={[styles.card, expanded && styles.cardExpanded]}>
         {expanded && e.image_url ? (
-          <Image source={{ uri: e.image_url }} style={styles.posterLarge} resizeMode="cover" />
+          <Pressable onPress={() => onImagePress(e.image_url!)} accessibilityLabel="View poster full screen">
+            <Image source={{ uri: e.image_url }} style={styles.posterLarge} resizeMode="cover" />
+          </Pressable>
         ) : null}
         <View style={styles.cardBody}>
           {!expanded && e.image_url ? (
-            <Image source={{ uri: e.image_url }} style={styles.poster} resizeMode="cover" />
+            <Pressable onPress={() => onImagePress(e.image_url!)} accessibilityLabel="View poster full screen">
+              <Image source={{ uri: e.image_url }} style={styles.poster} resizeMode="cover" />
+            </Pressable>
           ) : null}
           <View style={{ flex: 1, gap: 2 }}>
             <View style={styles.titleRow}>

@@ -24,6 +24,7 @@ import {
 } from 'react-native';
 import { AgentChangeSetCard } from '../../src/components/AgentChangeSetCard';
 import { GoalPlanCard } from '../../src/components/GoalPlanCard';
+import { ImageViewer } from '../../src/components/ImageViewer';
 import { useGoalPlans, commitGoalPlan, type LoadedPlan } from '../../src/lib/use-goal-plans';
 import { DayStrip } from '../../src/components/DayStrip';
 import { Screen } from '../../src/components/Screen';
@@ -66,6 +67,7 @@ export default function AgentScreen() {
   const { byMessage: changeSetsByMessage } = useChangeSets();
   const { byId: plansById } = useGoalPlans();
   const [listening, setListening] = useState(false);
+  const [viewerUri, setViewerUri] = useState<string | null>(null);
   // When the user spoke their message, speak the reply back (voice in → voice
   // out). A ref so the realtime handler (stable closure) reads the live value.
   const voiceReplyRef = useRef(false);
@@ -369,6 +371,7 @@ export default function AgentScreen() {
                 plan={item.goal_plan_id ? plansById[item.goal_plan_id] : undefined}
                 highlighted={item.id === highlightId}
                 onPromptDifferentTime={(s) => setDraft(s)}
+                onImagePress={setViewerUri}
               />
             )}
             ItemSeparatorComponent={() => <View style={{ height: space.sm }} />}
@@ -445,6 +448,8 @@ export default function AgentScreen() {
           </Pressable>
         </View>
       </KeyboardAvoidingView>
+
+      <ImageViewer uri={viewerUri} onClose={() => setViewerUri(null)} />
     </Screen>
   );
 }
@@ -519,12 +524,14 @@ function Bubble({
   plan,
   highlighted,
   onPromptDifferentTime,
+  onImagePress,
 }: {
   msg: ChatMessage;
   changeSet?: PendingChangeSet;
   plan?: LoadedPlan;
   highlighted?: boolean;
   onPromptDifferentTime?: (s: string) => void;
+  onImagePress?: (uri: string) => void;
 }) {
   const isUser = msg.role === 'user';
   const planCard = plan ? (
@@ -593,7 +600,9 @@ function Bubble({
           ]}
         >
           {msg.image_url ? (
-            <Image source={{ uri: msg.image_url }} style={styles.bubbleImage} resizeMode="cover" />
+            <Pressable onPress={() => onImagePress?.(msg.image_url!)} accessibilityLabel="View photo full screen">
+              <Image source={{ uri: msg.image_url }} style={styles.bubbleImage} resizeMode="cover" />
+            </Pressable>
           ) : null}
           {/* Hide the bare 📷 placeholder when the image itself is shown. */}
           {!(msg.image_url && msg.content === '📷') ? (
