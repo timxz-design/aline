@@ -3,6 +3,7 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import {
   ActivityIndicator,
   Alert,
+  Image,
   Linking,
   Pressable,
   ScrollView,
@@ -152,6 +153,9 @@ function EventRow({
 
   return (
     <View style={styles.card}>
+      {e.image_url ? (
+        <Image source={{ uri: e.image_url }} style={styles.poster} resizeMode="cover" />
+      ) : null}
       <View style={{ flex: 1, gap: 2 }}>
         <View style={styles.titleRow}>
           <Text style={styles.eventTitle} numberOfLines={2}>
@@ -265,6 +269,12 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     padding: space.md,
     gap: space.sm,
+  },
+  poster: {
+    width: 56,
+    height: 72,
+    borderRadius: radius.sm,
+    backgroundColor: colors.bgRaised,
   },
   titleRow: { flexDirection: 'row', alignItems: 'center', gap: space.xs },
   eventTitle: { color: colors.text, fontSize: font.size.md, fontWeight: '600', flexShrink: 1 },

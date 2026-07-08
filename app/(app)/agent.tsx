@@ -1,14 +1,18 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import * as FileSystem from 'expo-file-system/legacy';
+import * as ImagePicker from 'expo-image-picker';
 import * as Speech from 'expo-speech';
 import {
   ExpoSpeechRecognitionModule,
   useSpeechRecognitionEvent,
 } from 'expo-speech-recognition';
+import { decode as decodeBase64 } from 'base64-arraybuffer';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   ActivityIndicator,
   Alert,
   FlatList,
+  Image,
   KeyboardAvoidingView,
   Linking,
   Platform,
@@ -126,12 +130,71 @@ export default function AgentScreen() {
 
   const send = () => sendText(draft, false);
 
-  const sendText = async (raw: string, fromVoice: boolean) => {
-    if (!user || !raw.trim() || thinking) return;
+  // Photo → chat: snap a poster (or pick a screenshot), it uploads to storage
+  // and rides the message; the agent reads it server-side (vision) and can
+  // save_event straight from it.
+  const attachImage = () => {
+    if (!user || thinking) return;
+    const pick = async (fromCamera: boolean) => {
+      const perm = fromCamera
+        ? await ImagePicker.requestCameraPermissionsAsync()
+        : await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert('No access', 'Allow access in Settings to share posters with ALINE.');
+        return;
+      }
+      const res = fromCamera
+        ? await ImagePicker.launchCameraAsync({ quality: 0.5 })
+        : await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.5 });
+      if (res.canceled || !res.assets?.[0]?.uri) return;
+      await sendText(draft, false, res.assets[0].uri);
+    };
+    Alert.alert('Add a photo', 'An event poster, flyer, or screenshot — ALINE reads the details.', [
+      { text: 'Take photo', onPress: () => pick(true) },
+      { text: 'Choose from library', onPress: () => pick(false) },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
+  };
+
+  const uploadChatImage = async (uri: string): Promise<string | null> => {
+    if (!user) return null;
+    try {
+      const b64 = await FileSystem.readAsStringAsync(uri, { encoding: 'base64' });
+      const path = `${user.id}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`;
+      const { error: upErr } = await supabase.storage
+        .from('chat-images')
+        .upload(path, decodeBase64(b64), { contentType: 'image/jpeg' });
+      if (upErr) {
+        console.warn('image upload failed:', upErr.message);
+        return null;
+      }
+      return supabase.storage.from('chat-images').getPublicUrl(path).data.publicUrl;
+    } catch (e) {
+      console.warn('image read failed:', e);
+      return null;
+    }
+  };
+
+  const sendText = async (raw: string, fromVoice: boolean, imageUri?: string) => {
+    if (!user || thinking) return;
     const content = raw.trim();
+    if (!content && !imageUri) return;
     voiceReplyRef.current = fromVoice;
     setDraft('');
     setError(null);
+
+    // 0) Upload the image first (if any) so the message row carries its URL.
+    let imageUrl: string | null = null;
+    if (imageUri) {
+      setThinking(true);
+      imageUrl = await uploadChatImage(imageUri);
+      setThinking(false);
+      if (!imageUrl) {
+        setError('Could not upload the photo. Try again.');
+        setDraft(raw);
+        return;
+      }
+    }
 
     // 1) Persist the user's message and show it immediately.
     const { data: inserted, error: insertErr } = await supabase
@@ -139,7 +202,8 @@ export default function AgentScreen() {
       .insert({
         user_id: user.id,
         role: 'user',
-        content,
+        content: content || '📷',
+        image_url: imageUrl,
       })
       .select('*')
       .single();
@@ -339,6 +403,15 @@ export default function AgentScreen() {
         ) : null}
 
         <View style={styles.composer}>
+          <Pressable
+            onPress={attachImage}
+            disabled={thinking}
+            hitSlop={6}
+            style={({ pressed }) => [styles.micBtn, pressed && { opacity: 0.8 }]}
+            accessibilityLabel="Add a photo"
+          >
+            <Text style={styles.micBtnText}>📷</Text>
+          </Pressable>
           <TextInput
             style={styles.composerInput}
             placeholder={listening ? 'Listening…' : 'Talk to ALINE…'}
@@ -519,9 +592,15 @@ function Bubble({
             highlighted && styles.cardHighlight,
           ]}
         >
-          <Text selectable style={[styles.bubbleText, isUser && styles.bubbleTextUser]}>
-            {renderRich(msg.content, isUser)}
-          </Text>
+          {msg.image_url ? (
+            <Image source={{ uri: msg.image_url }} style={styles.bubbleImage} resizeMode="cover" />
+          ) : null}
+          {/* Hide the bare 📷 placeholder when the image itself is shown. */}
+          {!(msg.image_url && msg.content === '📷') ? (
+            <Text selectable style={[styles.bubbleText, isUser && styles.bubbleTextUser]}>
+              {renderRich(msg.content, isUser)}
+            </Text>
+          ) : null}
         </View>
       </View>
       {changeSet ? (
@@ -624,6 +703,13 @@ const styles = StyleSheet.create({
   },
   bubbleText: { color: colors.text, fontSize: 15, lineHeight: 22 },
   bubbleTextUser: { color: colors.textInverse },
+  bubbleImage: {
+    width: 220,
+    height: 280,
+    borderRadius: radius.md,
+    marginBottom: 4,
+    backgroundColor: colors.bgRaised,
+  },
   boldText: { fontWeight: '700' },
   link: { textDecorationLine: 'underline' },
   proactiveCard: {

@@ -303,6 +303,7 @@ export type Database = {
           extracted_data: Json | null
           goal_plan_id: string | null
           id: string
+          image_url: string | null
           input_tokens: number | null
           model: string | null
           output_tokens: number | null
@@ -316,6 +317,7 @@ export type Database = {
           extracted_data?: Json | null
           goal_plan_id?: string | null
           id?: string
+          image_url?: string | null
           input_tokens?: number | null
           model?: string | null
           output_tokens?: number | null
@@ -329,6 +331,7 @@ export type Database = {
           extracted_data?: Json | null
           goal_plan_id?: string | null
           id?: string
+          image_url?: string | null
           input_tokens?: number | null
           model?: string | null
           output_tokens?: number | null
@@ -353,6 +356,7 @@ export type Database = {
           description: string | null
           ends_at: string | null
           id: string
+          image_url: string | null
           last_seen_at: string
           lat: number | null
           lon: number | null
@@ -375,6 +379,7 @@ export type Database = {
           description?: string | null
           ends_at?: string | null
           id?: string
+          image_url?: string | null
           last_seen_at?: string
           lat?: number | null
           lon?: number | null
@@ -397,6 +402,7 @@ export type Database = {
           description?: string | null
           ends_at?: string | null
           id?: string
+          image_url?: string | null
           last_seen_at?: string
           lat?: number | null
           lon?: number | null

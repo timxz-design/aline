@@ -34,6 +34,7 @@ type ChatRow = {
   role: 'user' | 'agent' | 'system';
   content: string;
   created_at: string | null;
+  image_url?: string | null; // selected only on the triggering message
 };
 
 type ProfileRow = {
@@ -191,6 +192,7 @@ type Extracted = {
 // Anthropic message types
 type ContentBlock =
   | { type: 'text'; text: string }
+  | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } }
   | { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> }
   | { type: 'tool_result'; tool_use_id: string; content: string; is_error?: boolean };
 
@@ -680,7 +682,8 @@ const TOOLS = [
     name: 'save_event',
     description:
       "Publish a LOCAL EVENT to ALINE's shared town listing — a happening others could discover and attend (concert, market, quiz night, match, workshop, a hangout the user is hosting). NOT for the user's personal appointments/schedule — those go on the calendar via propose_change_set, never here. Use when the user tells you about something happening ('there's a concert at Kino Šiška Friday 8pm', 'add the Saturday farmers market', 'I'm hosting a BBQ for friends Sunday'). " +
-      "Visibility: 'public' = whole town listing (default for real local happenings), 'friends' = only the user's friends discover it (personal hangouts, house events), 'private' = only the user. Infer from phrasing; if genuinely ambiguous, ask. Saving the same title on the same day updates it instead of duplicating. The venue is geocoded automatically from venue_text when possible. For recurring happenings ('every Friday'), save the next 2–4 occurrences individually.",
+      "Visibility: 'public' = whole town listing (default for real local happenings), 'friends' = only the user's friends discover it (personal hangouts, house events), 'private' = only the user. Infer from phrasing; if genuinely ambiguous, ask. Saving the same title on the same day updates it instead of duplicating. The venue is geocoded automatically from venue_text when possible. For recurring happenings ('every Friday'), save the next 2–4 occurrences individually. " +
+      "POSTER PHOTOS: when the user sends a photo of an event poster / flyer / event-page screenshot, read the details from the image and save from those. The photo is attached to the listing automatically as its image. BEFORE saving, confirm anything the poster leaves unclear — posters often omit the YEAR or the concrete date ('SATURDAY 20:00'): resolve to the next upcoming matching date and say which date you read. If the image is unreadable or clearly not an event, say so instead of guessing. State what you extracted in one compact line when confirming.",
     input_schema: {
       type: 'object',
       properties: {
@@ -1552,7 +1555,7 @@ Deno.serve(async (req: Request) => {
       .limit(30),
     supabase
       .from('chat_messages')
-      .select('id, role, content, created_at')
+      .select('id, role, content, created_at, image_url')
       .eq('id', body.user_message_id)
       .eq('user_id', userId)
       .maybeSingle(),
@@ -1789,6 +1792,36 @@ Deno.serve(async (req: Request) => {
 
   const messages: ClaudeMessage[] = toClaudeMessages(recentChat);
 
+  // Vision: if the triggering message carries an image (poster / event page /
+  // screenshot), attach it to the LAST user turn so the model can read it.
+  // Only the current turn's image is sent — history images stay text-only.
+  if (triggerMsg?.image_url) {
+    try {
+      const imgRes = await fetch(triggerMsg.image_url);
+      if (imgRes.ok) {
+        const buf = new Uint8Array(await imgRes.arrayBuffer());
+        // Chunked base64 — avoids call-stack limits on large posters.
+        let bin = '';
+        const CHUNK = 32768;
+        for (let i = 0; i < buf.length; i += CHUNK) {
+          bin += String.fromCharCode(...buf.subarray(i, i + CHUNK));
+        }
+        const b64 = btoa(bin);
+        const ext = triggerMsg.image_url.split('.').pop()?.toLowerCase() ?? 'jpg';
+        const mediaType = ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : ext === 'heic' ? 'image/heic' : 'image/jpeg';
+        const lastUser = [...messages].reverse().find((m) => m.role === 'user');
+        if (lastUser && typeof lastUser.content === 'string') {
+          lastUser.content = [
+            { type: 'image', source: { type: 'base64', media_type: mediaType, data: b64 } },
+            { type: 'text', text: lastUser.content || '(the user sent this image)' },
+          ];
+        }
+      }
+    } catch (e) {
+      console.warn('image fetch failed, continuing text-only:', e instanceof Error ? e.message : e);
+    }
+  }
+
   // -------- agentic loop --------
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
@@ -1866,7 +1899,8 @@ Deno.serve(async (req: Request) => {
         upcomingHangouts,
         userTz,
         tu.name,
-        tu.input
+        tu.input,
+        triggerMsg?.image_url ?? null
       );
       toolsExecuted.push({ name: tu.name, input: tu.input, result: result.message, ok: result.ok });
       toolResults.push({
@@ -2207,7 +2241,8 @@ async function executeTool(
   upcomingHangouts: UpcomingHangoutRow[],
   userTimezone: string,
   name: string,
-  input: Record<string, unknown>
+  input: Record<string, unknown>,
+  triggerImageUrl: string | null = null
 ): Promise<{ ok: boolean; message: string }> {
   if (name === 'propose_hangout') {
     const groupId = input.group_id ? String(input.group_id) : '';
@@ -3385,6 +3420,8 @@ async function executeTool(
       visibility,
       created_by: userId,
       source: 'manual',
+      // Poster shot from this turn becomes the listing's image.
+      image_url: triggerImageUrl,
       last_seen_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
@@ -3403,7 +3440,10 @@ async function executeTool(
       .maybeSingle();
 
     if (dupe) {
-      const { error } = await supabase.from('events').update(row).eq('id', (dupe as { id: string }).id);
+      // Text-only revisions must not wipe an existing poster image.
+      const { image_url: _img, ...rest } = row;
+      const updateRow = triggerImageUrl ? row : rest;
+      const { error } = await supabase.from('events').update(updateRow).eq('id', (dupe as { id: string }).id);
       if (error) return { ok: false, message: `couldn't update the event: ${error.message}` };
       return {
         ok: true,

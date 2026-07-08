@@ -19,7 +19,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "app.aline.mvp",
-      "buildNumber": "22",
+      "buildNumber": "23",
       "infoPlist": {
         "NSCalendarsUsageDescription": "ALINE reads your calendar to coordinate hangouts with your friend groups.",
         "NSContactsUsageDescription": "ALINE uses contacts to help you invite friends to your groups.",
@@ -62,6 +62,13 @@
     "plugins": [
       "expo-router",
       "expo-task-manager",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "ALINE uses your photo library so you can share event posters and flyers with your agent.",
+          "cameraPermission": "ALINE uses the camera so you can snap event posters and add them to the town listing."
+        }
+      ],
       [
         "@sentry/react-native/expo",
         {
