@@ -186,6 +186,7 @@ export type Database = {
           hangout_id: string | null
           id: string
           is_movable: boolean
+          local_event_id: string | null
           location: string | null
           original_start_at: string | null
           source: string | null
@@ -206,6 +207,7 @@ export type Database = {
           hangout_id?: string | null
           id?: string
           is_movable?: boolean
+          local_event_id?: string | null
           location?: string | null
           original_start_at?: string | null
           source?: string | null
@@ -226,6 +228,7 @@ export type Database = {
           hangout_id?: string | null
           id?: string
           is_movable?: boolean
+          local_event_id?: string | null
           location?: string | null
           original_start_at?: string | null
           source?: string | null

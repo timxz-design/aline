@@ -3491,6 +3491,19 @@ async function executeTool(
       return { ok: true, message: 'No listed events in that window. Say so honestly — never invent events. (The listing is young; the user can add things they hear about.)' };
     }
 
+    // Which of these is the user already committed to (via "I'm going")?
+    const goingIds = new Set<string>();
+    {
+      const { data: going } = await supabase
+        .from('calendar_events')
+        .select('local_event_id')
+        .eq('user_id', userId)
+        .in('local_event_id', events.map((e) => e.id));
+      for (const g of (going ?? []) as { local_event_id: string | null }[]) {
+        if (g.local_event_id) goingIds.add(g.local_event_id);
+      }
+    }
+
     // One Distance-Matrix call for everything with coordinates.
     const driveByIdx = new Map<number, number>();
     const origin = mapsConfigured() ? await resolveOrigin(supabase, userId) : null;
@@ -3533,6 +3546,7 @@ async function executeTool(
         e.price_text,
         drive != null ? `~${drive} min drive` : null,
         who,
+        goingIds.has(e.id) ? 'USER IS ALREADY GOING (on their calendar)' : null,
         e.description,
       ].filter(Boolean).join(' · ');
       return `${facts} [event_id:${e.id}]${mapUrl ? ` [map:${mapUrl}]` : ''}${e.url ? ` [info:${e.url}]` : ''}`;

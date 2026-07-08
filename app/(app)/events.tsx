@@ -26,11 +26,19 @@ import type { LocalEvent } from '../../src/types/database';
  * + own). All the WRITE flows (add / find / cancel) go through the agent —
  * the composer is seeded, same pattern as Goals.
  */
+/** End of an event: explicit end, else start + 2h (concert-ish default). */
+function eventEnd(e: LocalEvent): string {
+  return e.ends_at ?? new Date(new Date(e.starts_at).getTime() + 2 * 3600 * 1000).toISOString();
+}
+
 export default function EventsScreen() {
   const { user } = useAuth();
   const router = useRouter();
   const [events, setEvents] = useState<LocalEvent[]>([]);
   const [loading, setLoading] = useState(true);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  // event_id → calendar_event_id for events already on the user's calendar.
+  const [goingMap, setGoingMap] = useState<Record<string, string>>({});
 
   const seedAgent = (text: string) =>
     router.push({ pathname: '/(app)/agent', params: { seed: text } });
@@ -46,9 +54,103 @@ export default function EventsScreen() {
       .lte('starts_at', new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString())
       .order('starts_at', { ascending: true })
       .limit(50);
-    setEvents((data as LocalEvent[] | null) ?? []);
+    const rows = (data as LocalEvent[] | null) ?? [];
+    setEvents(rows);
+    // Going-state: which of these are already on my calendar?
+    if (rows.length > 0) {
+      const { data: going } = await supabase
+        .from('calendar_events')
+        .select('id, local_event_id')
+        .eq('user_id', user.id)
+        .in('local_event_id', rows.map((r) => r.id));
+      const map: Record<string, string> = {};
+      for (const g of (going ?? []) as { id: string; local_event_id: string | null }[]) {
+        if (g.local_event_id) map[g.local_event_id] = g.id;
+      }
+      setGoingMap(map);
+    } else {
+      setGoingMap({});
+    }
     setLoading(false);
   }, [user]);
+
+  // "I'm going" — the goal-plan direct-commit principle: deterministic action,
+  // one tap, no chat round-trip. The agent only gets involved when there's an
+  // actual conflict to negotiate.
+  const goToEvent = useCallback(
+    async (e: LocalEvent) => {
+      if (!user) return;
+      const end = eventEnd(e);
+      const insertGo = async () => {
+        const { error } = await supabase.from('calendar_events').insert({
+          user_id: user.id,
+          title: e.title,
+          start_at: e.starts_at,
+          end_at: end,
+          location: e.venue_text,
+          description: e.description,
+          event_type: 'flexible',
+          is_movable: false,
+          source: 'aline',
+          local_event_id: e.id,
+        });
+        if (error) {
+          Alert.alert('Could not add', error.message);
+          return;
+        }
+        await load();
+      };
+
+      // Conflict check: anything already on the calendar overlapping the slot.
+      const { data: clash } = await supabase
+        .from('calendar_events')
+        .select('id, title, start_at')
+        .eq('user_id', user.id)
+        .lt('start_at', end)
+        .gt('end_at', e.starts_at)
+        .limit(1);
+      const conflict = (clash ?? [])[0] as { title: string | null } | undefined;
+
+      if (conflict) {
+        Alert.alert(
+          'Schedule clash',
+          `"${conflict.title ?? 'Another plan'}" overlaps this event.`,
+          [
+            {
+              text: 'Let ALINE sort it',
+              onPress: () =>
+                seedAgent(
+                  `I want to go to "${e.title}" (${e.venue_text ?? ''}) starting ${e.starts_at}, but it clashes with "${conflict.title ?? 'an existing plan'}". Help me rearrange things so I can make it.`,
+                ),
+            },
+            { text: 'Add anyway', onPress: insertGo },
+            { text: 'Cancel', style: 'cancel' },
+          ],
+        );
+        return;
+      }
+      await insertGo();
+    },
+    [user, load],
+  );
+
+  const unGoEvent = useCallback(
+    (e: LocalEvent, calendarEventId: string) => {
+      Alert.alert('Not going?', `"${e.title}" will be removed from your calendar.`, [
+        { text: 'Keep it', style: 'cancel' },
+        {
+          text: 'Remove',
+          style: 'destructive',
+          onPress: async () => {
+            const { error } = await supabase.from('calendar_events').delete().eq('id', calendarEventId);
+            if (error) Alert.alert('Failed', error.message);
+            else load();
+          },
+        },
+      ]);
+    },
+    [load],
+  );
 
   useFocusEffect(
     useCallback(() => {
@@ -103,6 +205,11 @@ export default function EventsScreen() {
                       key={e.id}
                       event={e}
                       mine={e.created_by === user?.id}
+                      expanded={expandedId === e.id}
+                      goingCalId={goingMap[e.id] ?? null}
+                      onToggle={() => setExpandedId(expandedId === e.id ? null : e.id)}
+                      onGo={() => goToEvent(e)}
+                      onUnGo={(calId) => unGoEvent(e, calId)}
                       onCancel={() => cancelOwn(e)}
                     />
                   ))}
@@ -131,14 +238,28 @@ export default function EventsScreen() {
 function EventRow({
   event: e,
   mine,
+  expanded,
+  goingCalId,
+  onToggle,
+  onGo,
+  onUnGo,
   onCancel,
 }: {
   event: LocalEvent;
   mine: boolean;
+  expanded: boolean;
+  goingCalId: string | null;
+  onToggle: () => void;
+  onGo: () => void;
+  onUnGo: (calendarEventId: string) => void;
   onCancel: () => void;
 }) {
   const start = new Date(e.starts_at);
   const time = start.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  const endTime = e.ends_at
+    ? new Date(e.ends_at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+    : null;
+  const going = goingCalId != null;
   const openMap = () => {
     const url =
       e.lat != null && e.lon != null
@@ -149,51 +270,85 @@ function EventRow({
     if (url) Linking.openURL(url);
   };
 
-  const meta = [time, e.venue_text, e.price_text].filter(Boolean).join(' · ');
+  const meta = [
+    endTime ? `${time}–${endTime}` : time,
+    e.venue_text,
+    e.price_text,
+    expanded ? e.category : null,
+  ].filter(Boolean).join(' · ');
 
+  // Collapsed: compact scannable row. Expanded: full poster, whole description,
+  // and the action row. Tap anywhere on the card body to toggle.
   return (
-    <View style={styles.card}>
-      {e.image_url ? (
-        <Image source={{ uri: e.image_url }} style={styles.poster} resizeMode="cover" />
-      ) : null}
-      <View style={{ flex: 1, gap: 2 }}>
-        <View style={styles.titleRow}>
-          <Text style={styles.eventTitle} numberOfLines={2}>
-            {e.title}
-          </Text>
-          {e.visibility !== 'public' ? (
-            <View style={styles.badge}>
-              <Text style={styles.badgeText}>
-                {e.visibility === 'friends' ? 'friends' : 'private'}
-              </Text>
-            </View>
+    <Pressable onPress={onToggle} style={({ pressed }) => [pressed && { opacity: 0.9 }]}>
+      <View style={[styles.card, expanded && styles.cardExpanded]}>
+        {expanded && e.image_url ? (
+          <Image source={{ uri: e.image_url }} style={styles.posterLarge} resizeMode="cover" />
+        ) : null}
+        <View style={styles.cardBody}>
+          {!expanded && e.image_url ? (
+            <Image source={{ uri: e.image_url }} style={styles.poster} resizeMode="cover" />
           ) : null}
+          <View style={{ flex: 1, gap: 2 }}>
+            <View style={styles.titleRow}>
+              <Text style={styles.eventTitle} numberOfLines={expanded ? undefined : 2}>
+                {e.title}
+              </Text>
+              {going ? (
+                <View style={[styles.badge, styles.badgeGoing]}>
+                  <Text style={[styles.badgeText, styles.badgeGoingText]}>going ✓</Text>
+                </View>
+              ) : null}
+              {e.visibility !== 'public' ? (
+                <View style={styles.badge}>
+                  <Text style={styles.badgeText}>
+                    {e.visibility === 'friends' ? 'friends' : 'private'}
+                  </Text>
+                </View>
+              ) : null}
+            </View>
+            <Text style={styles.eventMeta}>{meta}</Text>
+            {e.description ? (
+              <Text style={styles.eventDesc} numberOfLines={expanded ? undefined : 2}>
+                {e.description}
+              </Text>
+            ) : null}
+          </View>
         </View>
-        <Text style={styles.eventMeta}>{meta}</Text>
-        {e.description ? (
-          <Text style={styles.eventDesc} numberOfLines={2}>
-            {e.description}
-          </Text>
+
+        {expanded ? (
+          <View style={styles.expandedActions}>
+            <Pressable
+              onPress={() => (going ? onUnGo(goingCalId!) : onGo())}
+              style={({ pressed }) => [
+                styles.goBtn,
+                going && styles.goBtnGoing,
+                pressed && { opacity: 0.85 },
+              ]}
+            >
+              <Text style={[styles.goBtnText, going && styles.goBtnTextGoing]}>
+                {going ? "✓ You're going" : "I'm going"}
+              </Text>
+            </Pressable>
+            {e.venue_text || e.lat != null ? (
+              <Pressable onPress={openMap} style={styles.ghostBtn} hitSlop={4}>
+                <Text style={styles.ghostBtnText}>Map</Text>
+              </Pressable>
+            ) : null}
+            {e.url ? (
+              <Pressable onPress={() => Linking.openURL(e.url!)} style={styles.ghostBtn} hitSlop={4}>
+                <Text style={styles.ghostBtnText}>Info</Text>
+              </Pressable>
+            ) : null}
+            {mine ? (
+              <Pressable onPress={onCancel} style={styles.ghostBtn} hitSlop={4}>
+                <Text style={[styles.ghostBtnText, { color: colors.danger }]}>Cancel event</Text>
+              </Pressable>
+            ) : null}
+          </View>
         ) : null}
       </View>
-      <View style={styles.actions}>
-        {e.venue_text || e.lat != null ? (
-          <Pressable onPress={openMap} hitSlop={6}>
-            <Text style={styles.actionLink}>Map</Text>
-          </Pressable>
-        ) : null}
-        {e.url ? (
-          <Pressable onPress={() => Linking.openURL(e.url!)} hitSlop={6}>
-            <Text style={styles.actionLink}>Info</Text>
-          </Pressable>
-        ) : null}
-        {mine ? (
-          <Pressable onPress={onCancel} hitSlop={6}>
-            <Text style={[styles.actionLink, { color: colors.danger }]}>Cancel</Text>
-          </Pressable>
-        ) : null}
-      </View>
-    </View>
+    </Pressable>
   );
 }
 
@@ -262,7 +417,6 @@ const styles = StyleSheet.create({
   },
 
   card: {
-    flexDirection: 'row',
     backgroundColor: colors.bgElevated,
     borderRadius: radius.md,
     borderWidth: 1,
@@ -270,12 +424,51 @@ const styles = StyleSheet.create({
     padding: space.md,
     gap: space.sm,
   },
+  cardExpanded: { borderColor: colors.accent },
+  cardBody: { flexDirection: 'row', gap: space.sm },
   poster: {
     width: 56,
     height: 72,
     borderRadius: radius.sm,
     backgroundColor: colors.bgRaised,
   },
+  posterLarge: {
+    width: '100%',
+    height: 200,
+    borderRadius: radius.sm,
+    backgroundColor: colors.bgRaised,
+  },
+  expandedActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+    marginTop: space.xs,
+    flexWrap: 'wrap',
+  },
+  goBtn: {
+    backgroundColor: colors.accent,
+    borderRadius: radius.pill,
+    paddingHorizontal: space.lg,
+    paddingVertical: space.sm,
+  },
+  goBtnGoing: {
+    backgroundColor: colors.accentDim,
+    borderWidth: 1,
+    borderColor: colors.accent,
+  },
+  goBtnText: { color: colors.textInverse, fontSize: font.size.sm, fontWeight: '700' },
+  goBtnTextGoing: { color: colors.accent },
+  ghostBtn: {
+    paddingHorizontal: space.md,
+    paddingVertical: space.sm,
+    borderRadius: radius.pill,
+    backgroundColor: colors.bgRaised,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  ghostBtnText: { color: colors.text, fontSize: font.size.sm, fontWeight: '600' },
+  badgeGoing: { backgroundColor: colors.accent },
+  badgeGoingText: { color: colors.textInverse },
   titleRow: { flexDirection: 'row', alignItems: 'center', gap: space.xs },
   eventTitle: { color: colors.text, fontSize: font.size.md, fontWeight: '600', flexShrink: 1 },
   eventMeta: { color: colors.textMuted, fontSize: font.size.sm },
