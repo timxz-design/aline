@@ -7,7 +7,7 @@ import {
   useSpeechRecognitionEvent,
 } from 'expo-speech-recognition';
 import { decode as decodeBase64 } from 'base64-arraybuffer';
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -25,6 +25,9 @@ import {
 import { AgentChangeSetCard } from '../../src/components/AgentChangeSetCard';
 import { GoalPlanCard } from '../../src/components/GoalPlanCard';
 import { ImageViewer } from '../../src/components/ImageViewer';
+import { EventCard } from '../../src/components/EventCard';
+import { useLocalEvents } from '../../src/lib/use-local-events';
+import type { LocalEvent } from '../../src/types/database';
 import { useGoalPlans, commitGoalPlan, type LoadedPlan } from '../../src/lib/use-goal-plans';
 import { DayStrip } from '../../src/components/DayStrip';
 import { Screen } from '../../src/components/Screen';
@@ -66,6 +69,11 @@ export default function AgentScreen() {
   const listRef = useRef<FlatList<ChatMessage>>(null);
   const { byMessage: changeSetsByMessage } = useChangeSets();
   const { byId: plansById } = useGoalPlans();
+  const chatEventIds = useMemo(
+    () => [...new Set(messages.flatMap((m) => m.event_ids ?? []))],
+    [messages],
+  );
+  const { byId: eventsById, goingMap, refresh: refreshEvents } = useLocalEvents(chatEventIds);
   const [listening, setListening] = useState(false);
   const [viewerUri, setViewerUri] = useState<string | null>(null);
   // When the user spoke their message, speak the reply back (voice in → voice
@@ -372,6 +380,10 @@ export default function AgentScreen() {
                 highlighted={item.id === highlightId}
                 onPromptDifferentTime={(s) => setDraft(s)}
                 onImagePress={setViewerUri}
+                events={(item.event_ids ?? []).map((id) => eventsById[id]).filter(Boolean)}
+                goingMap={goingMap}
+                userId={user?.id ?? null}
+                onEventChanged={refreshEvents}
               />
             )}
             ItemSeparatorComponent={() => <View style={{ height: space.sm }} />}
@@ -525,6 +537,10 @@ function Bubble({
   highlighted,
   onPromptDifferentTime,
   onImagePress,
+  events,
+  goingMap,
+  userId,
+  onEventChanged,
 }: {
   msg: ChatMessage;
   changeSet?: PendingChangeSet;
@@ -532,6 +548,10 @@ function Bubble({
   highlighted?: boolean;
   onPromptDifferentTime?: (s: string) => void;
   onImagePress?: (uri: string) => void;
+  events?: LocalEvent[];
+  goingMap?: Record<string, string>;
+  userId?: string | null;
+  onEventChanged?: () => void;
 }) {
   const isUser = msg.role === 'user';
   const planCard = plan ? (
@@ -555,6 +575,21 @@ function Bubble({
           );
         }}
       />
+    </View>
+  ) : null;
+  const eventCards = events && events.length > 0 && userId ? (
+    <View style={styles.eventCardsWrap}>
+      {events.map((e) => (
+        <EventCard
+          key={e.id}
+          event={e}
+          userId={userId}
+          going={!!goingMap?.[e.id]}
+          onChanged={() => onEventChanged?.()}
+          onImagePress={onImagePress}
+          onSeedAgent={onPromptDifferentTime}
+        />
+      ))}
     </View>
   ) : null;
   const ed = (msg.extracted_data ?? null) as
@@ -585,6 +620,7 @@ function Bubble({
           />
         ) : null}
         {planCard}
+        {eventCards}
       </View>
     );
   }
@@ -712,6 +748,7 @@ const styles = StyleSheet.create({
   },
   bubbleText: { color: colors.text, fontSize: 15, lineHeight: 22 },
   bubbleTextUser: { color: colors.textInverse },
+  eventCardsWrap: { gap: space.sm, marginTop: space.sm },
   bubbleImage: {
     width: 220,
     height: 280,

@@ -1976,6 +1976,16 @@ Deno.serve(async (req: Request) => {
     }
   }
 
+  // Event-card links: any events found/saved this turn render as cards under
+  // the reply. Ids come from the [event_id:…] tokens in the tool results.
+  const linkEventIds: string[] = [];
+  for (const t of toolsExecuted) {
+    if (!t.ok || (t.name !== 'find_events' && t.name !== 'save_event')) continue;
+    for (const m of t.result.matchAll(/\[event_id:([0-9a-f-]{36})\]/g)) {
+      if (!linkEventIds.includes(m[1])) linkEventIds.push(m[1]);
+    }
+  }
+
   // -------- persist agent reply --------
   const { data: agentMsg, error: insertErr } = await supabase
     .from('chat_messages')
@@ -1985,6 +1995,7 @@ Deno.serve(async (req: Request) => {
       content: reply || '(no response)',
       model: MODEL,
       goal_plan_id: linkPlanId,
+      event_ids: linkEventIds.length > 0 ? linkEventIds : null,
       input_tokens: totalInputTokens || null,
       output_tokens: totalOutputTokens || null,
       context_snapshot: {
@@ -3456,7 +3467,7 @@ async function executeTool(
     const geoNote = venueId ? ' Venue resolved on the map.' : lat != null ? '' : venueText ? ' (Venue kept as text — no map match.)' : '';
     return {
       ok: true,
-      message: `Saved "${title}" to the ${visibility} listing [event_id:${(inserted as { id: string }).id}].${geoNote} Confirm briefly — one line, no recap of every field.`,
+      message: `Saved "${title}" to the ${visibility} listing [event_id:${(inserted as { id: string }).id}].${geoNote} The saved event renders as a CARD under your reply — confirm in ONE short line, no recap of the fields.`,
     };
   }
 
@@ -3554,7 +3565,7 @@ async function executeTool(
 
     return {
       ok: true,
-      message: `Local events in that window (times are UTC — phrase them in the user's timezone):\n${lines.join('\n')}\n\nFORMAT the reply for scanning, not prose. Pick the best 1-3 for THIS user (free at that time / matches their tastes / close by) and render each as exactly two lines:\n**Title** — Fri 8:30pm · Venue · 10€ · ~12 min drive [map:URL]\nOne short plain reason it fits them (skip this line if there is no real reason).\nLead with the strongest pick. At most ONE short intro line before the list ("Two things on this weekend:"). Local times only (never ISO), never show event_id to the user, compress descriptions into the reason line — don't recite them. If you showed fewer than exist, end with one line naming the rest: "Also on: X Sat, Y Sun — want details?". If they want to go to one, offer to put it on their calendar (propose_change_set). Never invent events beyond these.`,
+      message: `Local events in that window (times are UTC — phrase any time you mention in the user's timezone):\n${lines.join('\n')}\n\nIMPORTANT: these events render automatically as STRUCTURED CARDS under your reply (poster, time, venue, "I'm going" button) — do NOT list, enumerate, or describe them in your reply text. Keep <reply> to ONE short spoken-friendly line, e.g. "Here's what's on this weekend." Optionally add ONE sentence pointing at the single best fit and why ("the jazz night fits your free Friday evening"). Never recite titles/times/venues — the cards carry all of that, and long replies get read aloud in voice mode. Never invent events beyond these. If they say they want to go, offer propose_change_set (or tell them to tap I'm going on the card).`,
     };
   }
 

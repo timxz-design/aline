@@ -302,6 +302,7 @@ export type Database = {
         Row: {
           content: string
           context_snapshot: Json | null
+          event_ids: string[] | null
           created_at: string | null
           extracted_data: Json | null
           goal_plan_id: string | null
@@ -316,6 +317,7 @@ export type Database = {
         Insert: {
           content: string
           context_snapshot?: Json | null
+          event_ids?: string[] | null
           created_at?: string | null
           extracted_data?: Json | null
           goal_plan_id?: string | null
@@ -330,6 +332,7 @@ export type Database = {
         Update: {
           content?: string
           context_snapshot?: Json | null
+          event_ids?: string[] | null
           created_at?: string | null
           extracted_data?: Json | null
           goal_plan_id?: string | null
