@@ -1,3 +1,4 @@
+import * as Haptics from 'expo-haptics';
 import { Alert, Image, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 import { colors, font, radius, space } from '../theme';
 import { goToLocalEvent, forceGoToLocalEvent } from '../lib/use-local-events';
@@ -42,6 +43,7 @@ export function EventCard({
   const go = async () => {
     const res = await goToLocalEvent(userId, e);
     if (res.status === 'added') {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
       onChanged();
       return;
     }
@@ -113,8 +115,6 @@ const styles = StyleSheet.create({
     gap: space.sm,
     backgroundColor: colors.bgElevated,
     borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: colors.border,
     padding: space.md,
     maxWidth: '88%',
   },

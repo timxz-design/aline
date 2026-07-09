@@ -265,8 +265,6 @@ const styles = StyleSheet.create({
   },
   btnGhost: {
     backgroundColor: 'transparent',
-    borderWidth: 1,
-    borderColor: colors.border,
   },
   btnGhostText: {
     color: colors.text,

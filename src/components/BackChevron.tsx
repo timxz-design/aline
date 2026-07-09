@@ -8,8 +8,9 @@
  */
 
 import { useRouter } from 'expo-router';
-import { Pressable, StyleSheet, Text } from 'react-native';
-import { colors, font, space } from '../theme';
+import { Pressable, StyleSheet } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { colors, space } from '../theme';
 
 export function BackChevron() {
   const router = useRouter();
@@ -22,7 +23,7 @@ export function BackChevron() {
       accessibilityRole="button"
       accessibilityLabel="Go back"
     >
-      <Text style={styles.glyph}>‹</Text>
+      <Ionicons name="chevron-back" size={22} color={colors.textMuted} />
     </Pressable>
   );
 }
@@ -35,12 +36,5 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginBottom: space.xs,
     marginLeft: -space.xs, // align glyph with screen padding
-  },
-  glyph: {
-    color: colors.textMuted,
-    fontSize: font.size.xxl,
-    fontWeight: font.weight.regular,
-    lineHeight: font.size.xxl,
-    marginTop: -2,
   },
 });

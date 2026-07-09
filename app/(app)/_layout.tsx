@@ -1,3 +1,4 @@
+import { Ionicons } from '@expo/vector-icons';
 import * as Notifications from 'expo-notifications';
 import { Redirect, Tabs, useRouter } from 'expo-router';
 import { useEffect, useRef } from 'react';
@@ -13,29 +14,14 @@ import {
 import { useProfile } from '../../src/lib/use-profile';
 import { colors, space } from '../../src/theme';
 
-/**
- * Tab icons. Plain typography so we don't pull in an icon library yet —
- * we can swap to lucide-react-native or @expo/vector-icons in the next pass.
- */
-function TabIcon({ symbol, focused }: { symbol: string; focused: boolean }) {
+/** Tab icons — Ionicons, filled variant when focused. */
+function TabIcon({ name, focused }: { name: keyof typeof Ionicons.glyphMap; focused: boolean }) {
   return (
-    <View
-      style={{
-        alignItems: 'center',
-        justifyContent: 'center',
-        width: 24,
-        height: 24,
-      }}
-    >
-      <Text
-        style={{
-          fontSize: 16,
-          color: focused ? colors.accent : colors.textDim,
-        }}
-      >
-        {symbol}
-      </Text>
-    </View>
+    <Ionicons
+      name={name}
+      size={22}
+      color={focused ? colors.accent : colors.textDim}
+    />
   );
 }
 
@@ -179,28 +165,28 @@ export default function AppLayout() {
         name="agent"
         options={{
           title: 'Agent',
-          tabBarIcon: ({ focused }) => <TabIcon symbol="✦" focused={focused} />,
+          tabBarIcon: ({ focused }) => <TabIcon name={focused ? "sparkles" : "sparkles-outline"} focused={focused} />,
         }}
       />
       <Tabs.Screen
         name="week"
         options={{
           title: 'My Week',
-          tabBarIcon: ({ focused }) => <TabIcon symbol="◫" focused={focused} />,
+          tabBarIcon: ({ focused }) => <TabIcon name={focused ? "calendar" : "calendar-outline"} focused={focused} />,
         }}
       />
       <Tabs.Screen
         name="groups"
         options={{
           title: 'Groups',
-          tabBarIcon: ({ focused }) => <TabIcon symbol="◉" focused={focused} />,
+          tabBarIcon: ({ focused }) => <TabIcon name={focused ? "people" : "people-outline"} focused={focused} />,
         }}
       />
       <Tabs.Screen
         name="profile"
         options={{
           title: 'You',
-          tabBarIcon: ({ focused }) => <TabIcon symbol="◐" focused={focused} />,
+          tabBarIcon: ({ focused }) => <TabIcon name={focused ? "person-circle" : "person-circle-outline"} focused={focused} />,
         }}
       />
       {/* Goals + Events are reached from the agent header, not the tab bar. */}

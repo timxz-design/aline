@@ -8,8 +8,8 @@
 export const colors = {
   // Surfaces
   bg: '#0A0E1A',          // app background
-  bgElevated: '#111827',  // cards, inputs
-  bgRaised: '#1A2235',    // modals, hovered cards
+  bgElevated: '#131A2C',  // cards — separation comes from surface tone, not borders
+  bgRaised: '#1C2438',    // chips, inputs, nested surfaces
   border: '#1F2937',
   borderSubtle: '#161E2E',
 

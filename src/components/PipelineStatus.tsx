@@ -116,8 +116,6 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     paddingHorizontal: space.md,
     paddingVertical: space.sm,
-    borderWidth: 1,
-    borderColor: colors.border,
     gap: space.sm,
   },
   stripWarning: {

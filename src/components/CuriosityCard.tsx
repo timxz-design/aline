@@ -361,8 +361,6 @@ const styles = StyleSheet.create({
   },
   btnGhost: {
     backgroundColor: 'transparent',
-    borderWidth: 1,
-    borderColor: colors.border,
   },
   btnGhostText: {
     color: colors.text,
@@ -376,7 +374,5 @@ const styles = StyleSheet.create({
     paddingVertical: space.sm,
     color: colors.text,
     fontSize: font.size.md,
-    borderWidth: 1,
-    borderColor: colors.border,
   },
 });

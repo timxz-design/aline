@@ -1,3 +1,5 @@
+import { Ionicons } from '@expo/vector-icons';
+import * as Haptics from 'expo-haptics';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
@@ -190,6 +192,7 @@ export default function AgentScreen() {
     const content = raw.trim();
     if (!content && !imageUri) return;
     voiceReplyRef.current = fromVoice;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
     setDraft('');
     setError(null);
 
@@ -340,7 +343,8 @@ export default function AgentScreen() {
             accessibilityRole="button"
             accessibilityLabel="Events"
           >
-            <Text style={styles.goalsBtnText}>◈ Events</Text>
+            <Ionicons name="compass-outline" size={14} color={colors.accent} />
+            <Text style={styles.goalsBtnText}>Events</Text>
           </Pressable>
           <Pressable
             onPress={() => router.push('/(app)/goals')}
@@ -349,7 +353,8 @@ export default function AgentScreen() {
             accessibilityRole="button"
             accessibilityLabel="Goals"
           >
-            <Text style={styles.goalsBtnText}>◎ Goals</Text>
+            <Ionicons name="flag-outline" size={14} color={colors.accent} />
+            <Text style={styles.goalsBtnText}>Goals</Text>
           </Pressable>
         </View>
       </View>
@@ -425,7 +430,7 @@ export default function AgentScreen() {
             style={({ pressed }) => [styles.micBtn, pressed && { opacity: 0.8 }]}
             accessibilityLabel="Add a photo"
           >
-            <Text style={styles.micBtnText}>📷</Text>
+            <Ionicons name="camera-outline" size={20} color={colors.textMuted} />
           </Pressable>
           <TextInput
             style={styles.composerInput}
@@ -445,7 +450,7 @@ export default function AgentScreen() {
               pressed && { opacity: 0.8 },
             ]}
           >
-            <Text style={styles.micBtnText}>{listening ? '◼' : '🎤'}</Text>
+            <Ionicons name={listening ? 'stop' : 'mic-outline'} size={20} color={listening ? colors.accent : colors.textMuted} />
           </Pressable>
           <Pressable
             onPress={send}
@@ -456,7 +461,7 @@ export default function AgentScreen() {
               pressed && { opacity: 0.8 },
             ]}
           >
-            <Text style={styles.sendBtnText}>↑</Text>
+            <Ionicons name="arrow-up" size={18} color={colors.textInverse} />
           </Pressable>
         </View>
       </KeyboardAvoidingView>
@@ -706,11 +711,12 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
   },
   goalsBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
     paddingHorizontal: space.md,
     paddingVertical: space.xs,
     borderRadius: radius.pill,
-    borderWidth: 1,
-    borderColor: colors.border,
     backgroundColor: colors.bgElevated,
   },
   goalsBtnText: {

@@ -1,3 +1,5 @@
+import { Ionicons } from '@expo/vector-icons';
+import * as Haptics from 'expo-haptics';
 import { useFocusEffect } from 'expo-router';
 import { useCallback, useRef, useState } from 'react';
 import {
@@ -452,6 +454,7 @@ function FriendRow({
         </View>
         <Pressable
           onPress={async () => {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
             const next = friend.myTier === 'inner' ? 'friend' : 'inner';
             const { error } = await setFriendTier(friend.id, next);
             if (error) { Alert.alert('Could not update', error); return; }
@@ -461,9 +464,11 @@ function FriendRow({
           style={styles.tierToggle}
           accessibilityLabel={friend.myTier === 'inner' ? 'Remove from inner circle' : 'Add to inner circle'}
         >
-          <Text style={[styles.tierStar, friend.myTier === 'inner' && styles.tierStarOn]}>
-            {friend.myTier === 'inner' ? '★' : '☆'}
-          </Text>
+          <Ionicons
+            name={friend.myTier === 'inner' ? 'star' : 'star-outline'}
+            size={18}
+            color={friend.myTier === 'inner' ? colors.accent : colors.textDim}
+          />
         </Pressable>
       </View>
     </Swipeable>
@@ -687,8 +692,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.bgElevated,
     borderRadius: radius.lg,
     padding: space.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
   },
   identityRow: {
     flexDirection: 'row',
@@ -737,8 +740,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.bgElevated,
     borderRadius: radius.md,
     padding: space.md,
-    borderWidth: 1,
-    borderColor: colors.border,
     gap: 2,
   },
   factPrimary: { color: colors.text, fontSize: 14, fontWeight: '600' },
@@ -762,8 +763,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 6,
     backgroundColor: colors.bgElevated,
-    borderWidth: 1,
-    borderColor: colors.border,
     borderRadius: radius.pill,
     paddingHorizontal: space.md,
     paddingVertical: 6,
@@ -789,9 +788,9 @@ const styles = StyleSheet.create({
     gap: space.md,
     backgroundColor: colors.bgElevated,
     borderRadius: radius.md,
-    padding: space.md,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: 'transparent',
+    padding: space.md,
   },
   opennessOptionActive: {
     borderColor: colors.accent,
@@ -838,8 +837,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.bgElevated,
     borderRadius: radius.md,
     padding: space.sm,
-    borderWidth: 1,
-    borderColor: colors.border,
   },
   friendAvatar: {
     width: 36,
@@ -872,8 +869,6 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: radius.pill,
     backgroundColor: colors.bgRaised,
-    borderWidth: 1,
-    borderColor: colors.border,
   },
   miniBtnAccept: {
     paddingHorizontal: 12,

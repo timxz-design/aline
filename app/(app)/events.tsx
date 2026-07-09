@@ -1,9 +1,11 @@
+import * as Haptics from 'expo-haptics';
 import { useCallback, useState } from 'react';
 import { useFocusEffect, useRouter } from 'expo-router';
 import {
   ActivityIndicator,
   Alert,
   Image,
+  LayoutAnimation,
   Linking,
   Pressable,
   ScrollView,
@@ -80,6 +82,7 @@ export default function EventsScreen() {
       if (!user) return;
       const res = await goToLocalEvent(user.id, e);
       if (res.status === 'added') {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
         await load();
         return;
       }
@@ -182,7 +185,10 @@ export default function EventsScreen() {
                       mine={e.created_by === user?.id}
                       expanded={expandedId === e.id}
                       goingCalId={goingMap[e.id] ?? null}
-                      onToggle={() => setExpandedId(expandedId === e.id ? null : e.id)}
+                      onToggle={() => {
+                        LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+                        setExpandedId(expandedId === e.id ? null : e.id);
+                      }}
                       onGo={() => goToEvent(e)}
                       onUnGo={(calId) => unGoEvent(e, calId)}
                       onCancel={() => cancelOwn(e)}
@@ -404,7 +410,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.bgElevated,
     borderRadius: radius.md,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: 'transparent',
     padding: space.md,
     gap: space.sm,
   },
@@ -447,8 +453,6 @@ const styles = StyleSheet.create({
     paddingVertical: space.sm,
     borderRadius: radius.pill,
     backgroundColor: colors.bgRaised,
-    borderWidth: 1,
-    borderColor: colors.border,
   },
   ghostBtnText: { color: colors.text, fontSize: font.size.sm, fontWeight: '600' },
   badgeGoing: { backgroundColor: colors.accent },

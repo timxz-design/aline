@@ -128,8 +128,6 @@ const styles = StyleSheet.create({
   card: {
     backgroundColor: colors.bgElevated,
     borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
     padding: space.lg,
   },
   embedded: { backgroundColor: 'transparent', borderWidth: 0, padding: 0 },
