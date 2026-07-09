@@ -19,7 +19,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "app.aline.mvp",
-      "buildNumber": "26",
+      "buildNumber": "27",
       "infoPlist": {
         "NSCalendarsUsageDescription": "ALINE reads your calendar to coordinate hangouts with your friend groups.",
         "NSContactsUsageDescription": "ALINE uses contacts to help you invite friends to your groups.",
@@ -105,7 +105,8 @@
           "speechRecognitionPermission": "ALINE transcribes your speech on-device so you can talk to your agent."
         }
       ],
-      "expo-background-task"
+      "expo-background-task",
+      "expo-font"
     ],
     "experiments": {
       "typedRoutes": false
