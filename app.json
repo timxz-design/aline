@@ -14,7 +14,7 @@
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#F5F1EA"
+      "backgroundColor": "#F5F4EF"
     },
     "ios": {
       "supportsTablet": true,
@@ -35,7 +35,7 @@
       "package": "app.aline.mvp",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#F5F1EA"
+        "backgroundColor": "#F5F4EF"
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
