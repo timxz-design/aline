@@ -214,43 +214,10 @@ const styles = StyleSheet.create({
   loadingBox: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   scroll: { padding: space.lg, paddingBottom: space.xxl },
 
-  card: {
-    backgroundColor: colors.bgElevated,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
-    padding: space.lg,
-    marginBottom: space.md,
-  },
-  cardHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  cardTitle: { flex: 1, fontSize: font.size.lg, fontWeight: '600', color: colors.text },
-  badge: {
-    paddingHorizontal: space.sm,
-    paddingVertical: 3,
-    borderRadius: radius.pill,
-    marginLeft: space.sm,
-  },
-  badgeText: { fontSize: 10, fontWeight: '700', letterSpacing: 0.5 },
-  cardMeta: { color: colors.textMuted, fontSize: font.size.sm, marginTop: 4 },
 
-  summary: { color: colors.text, fontSize: font.size.md, marginTop: space.md, lineHeight: 21 },
 
-  sessions: { marginTop: space.md, gap: space.sm },
-  sessionRow: { flexDirection: 'row', alignItems: 'center' },
-  sessionDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: colors.eventGoal,
-    marginRight: space.md,
-  },
-  sessionActivity: { color: colors.text, fontSize: font.size.md, fontWeight: '500' },
-  sessionWhen: { color: colors.textMuted, fontSize: font.size.sm, marginTop: 1 },
 
-  draftNote: { color: colors.eventGoal, fontSize: font.size.sm, marginTop: space.md },
-  emptyPlanHint: { color: colors.textMuted, fontSize: font.size.sm, marginTop: space.sm, marginBottom: space.md, lineHeight: 19 },
 
-  btnRow: { flexDirection: 'row', gap: space.sm, marginTop: space.lg },
   btn: {
     flex: 1,
     paddingVertical: space.md,
@@ -259,8 +226,6 @@ const styles = StyleSheet.create({
   },
   btnPrimary: { backgroundColor: colors.accent },
   btnPrimaryText: { color: colors.textInverse, fontSize: font.size.md, fontWeight: '600' },
-  btnGhost: { backgroundColor: colors.bgRaised, borderWidth: 1, borderColor: colors.border },
-  btnGhostText: { color: colors.text, fontSize: font.size.md, fontWeight: '500' },
 
   newGoalBtn: { alignItems: 'center', paddingVertical: space.md, marginTop: space.sm },
   newGoalText: { color: colors.accent, fontSize: font.size.md, fontWeight: '600' },

@@ -408,35 +408,6 @@ const styles = StyleSheet.create({
     fontSize: font.size.sm,
     lineHeight: 18,
   },
-  archetypeCard: {
-    backgroundColor: colors.accentDim,
-    padding: space.lg,
-    borderRadius: radius.md,
-    gap: space.sm,
-  },
-  archetypeLabel: {
-    color: colors.accent,
-    fontSize: font.size.xs,
-    fontWeight: font.weight.semibold,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  archetypeText: {
-    color: colors.text,
-    fontSize: font.size.md,
-    fontWeight: font.weight.medium,
-    lineHeight: 22,
-  },
-  archetypeMetaRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: space.sm,
-    flexWrap: 'wrap',
-  },
-  archetypeMetaText: {
-    color: colors.textMuted,
-    fontSize: font.size.xs,
-  },
   sectionHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',

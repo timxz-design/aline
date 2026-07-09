@@ -16,6 +16,7 @@ import { Screen } from '../../src/components/Screen';
 import { useAuth } from '../../src/lib/auth-context';
 import { supabase } from '../../src/lib/supabase';
 import { ImageViewer } from '../../src/components/ImageViewer';
+import { goToLocalEvent, forceGoToLocalEvent } from '../../src/lib/use-local-events';
 import { colors, font, radius, space } from '../../src/theme';
 import type { LocalEvent } from '../../src/types/database';
 
@@ -27,11 +28,6 @@ import type { LocalEvent } from '../../src/types/database';
  * + own). All the WRITE flows (add / find / cancel) go through the agent —
  * the composer is seeded, same pattern as Goals.
  */
-/** End of an event: explicit end, else start + 2h (concert-ish default). */
-function eventEnd(e: LocalEvent): string {
-  return e.ends_at ?? new Date(new Date(e.starts_at).getTime() + 2 * 3600 * 1000).toISOString();
-}
-
 export default function EventsScreen() {
   const { user } = useAuth();
   const router = useRouter();
@@ -82,56 +78,33 @@ export default function EventsScreen() {
   const goToEvent = useCallback(
     async (e: LocalEvent) => {
       if (!user) return;
-      const end = eventEnd(e);
-      const insertGo = async () => {
-        const { error } = await supabase.from('calendar_events').insert({
-          user_id: user.id,
-          title: e.title,
-          start_at: e.starts_at,
-          end_at: end,
-          location: e.venue_text,
-          description: e.description,
-          event_type: 'flexible',
-          is_movable: false,
-          source: 'aline',
-          local_event_id: e.id,
-        });
-        if (error) {
-          Alert.alert('Could not add', error.message);
-          return;
-        }
+      const res = await goToLocalEvent(user.id, e);
+      if (res.status === 'added') {
         await load();
-      };
-
-      // Conflict check: anything already on the calendar overlapping the slot.
-      const { data: clash } = await supabase
-        .from('calendar_events')
-        .select('id, title, start_at')
-        .eq('user_id', user.id)
-        .lt('start_at', end)
-        .gt('end_at', e.starts_at)
-        .limit(1);
-      const conflict = (clash ?? [])[0] as { title: string | null } | undefined;
-
-      if (conflict) {
-        Alert.alert(
-          'Schedule clash',
-          `"${conflict.title ?? 'Another plan'}" overlaps this event.`,
-          [
-            {
-              text: 'Let ALINE sort it',
-              onPress: () =>
-                seedAgent(
-                  `I want to go to "${e.title}" (${e.venue_text ?? ''}) starting ${e.starts_at}, but it clashes with "${conflict.title ?? 'an existing plan'}". Help me rearrange things so I can make it.`,
-                ),
-            },
-            { text: 'Add anyway', onPress: insertGo },
-            { text: 'Cancel', style: 'cancel' },
-          ],
-        );
         return;
       }
-      await insertGo();
+      if (res.status === 'clash') {
+        Alert.alert('Schedule clash', `"${res.conflictTitle}" overlaps this event.`, [
+          {
+            text: 'Let ALINE sort it',
+            onPress: () =>
+              seedAgent(
+                `I want to go to "${e.title}" (${e.venue_text ?? ''}) starting ${e.starts_at}, but it clashes with "${res.conflictTitle}". Help me rearrange things so I can make it.`,
+              ),
+          },
+          {
+            text: 'Add anyway',
+            onPress: async () => {
+              const r = await forceGoToLocalEvent(user.id, e);
+              if (r.status === 'error') Alert.alert('Could not add', r.message);
+              else load();
+            },
+          },
+          { text: 'Cancel', style: 'cancel' },
+        ]);
+        return;
+      }
+      Alert.alert('Could not add', res.message);
     },
     [user, load],
   );
@@ -491,8 +464,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.accentDim,
   },
   badgeText: { color: colors.accent, fontSize: 10, fontWeight: '700' },
-  actions: { justifyContent: 'center', alignItems: 'flex-end', gap: space.xs },
-  actionLink: { color: colors.accent, fontSize: font.size.xs, fontWeight: '600' },
 
   addBtn: { alignItems: 'center', paddingVertical: space.md, marginTop: space.sm },
   addText: { color: colors.accent, fontSize: font.size.md, fontWeight: '600' },

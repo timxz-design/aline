@@ -3444,7 +3444,7 @@ async function executeTool(
       .from('events')
       .select('id')
       .eq('created_by', userId)
-      .ilike('title', title)
+      .ilike('title', title.replace(/([%_\\])/g, '\\$1'))
       .gte('starts_at', new Date(new Date(startsAt).getTime() - windowMs).toISOString())
       .lte('starts_at', new Date(new Date(startsAt).getTime() + windowMs).toISOString())
       .limit(1)

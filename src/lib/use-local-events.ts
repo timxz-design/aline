@@ -55,12 +55,15 @@ export async function goToLocalEvent(
   const end = e.ends_at ?? new Date(new Date(e.starts_at).getTime() + 2 * 3600 * 1000).toISOString();
   const { data: clash } = await supabase
     .from('calendar_events')
-    .select('id, title')
+    .select('id, title, event_type')
     .eq('user_id', userId)
     .lt('start_at', end)
     .gt('end_at', e.starts_at)
-    .limit(1);
-  const conflict = (clash ?? [])[0] as { title: string | null } | undefined;
+    .limit(5);
+  // Routines/transit are soft, auto-materialized blocks — an inferred gym
+  // habit shouldn't veto a concert. Only real commitments count as clashes.
+  const conflict = ((clash ?? []) as { title: string | null; event_type: string | null }[])
+    .find((c) => c.event_type !== 'routine' && c.event_type !== 'transit');
   if (conflict) return { status: 'clash', conflictTitle: conflict.title ?? 'an existing plan' };
   return forceGoToLocalEvent(userId, e);
 }

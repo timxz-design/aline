@@ -718,11 +718,6 @@ const styles = StyleSheet.create({
     fontSize: font.size.sm,
     fontWeight: '600',
   },
-  subtitle: {
-    color: colors.textMuted,
-    fontSize: 12,
-    marginTop: 2,
-  },
   planWrap: { marginTop: space.sm },
   kav: { flex: 1 },
   loadingBox: { flex: 1, alignItems: 'center', justifyContent: 'center' },
