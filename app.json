@@ -9,17 +9,17 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "dark",
+    "userInterfaceStyle": "light",
     "newArchEnabled": false,
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#0A0E1A"
+      "backgroundColor": "#F5F1EA"
     },
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "app.aline.mvp",
-      "buildNumber": "27",
+      "buildNumber": "28",
       "infoPlist": {
         "NSCalendarsUsageDescription": "ALINE reads your calendar to coordinate hangouts with your friend groups.",
         "NSContactsUsageDescription": "ALINE uses contacts to help you invite friends to your groups.",
@@ -35,7 +35,7 @@
       "package": "app.aline.mvp",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#0A0E1A"
+        "backgroundColor": "#F5F1EA"
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
@@ -79,7 +79,7 @@
       [
         "expo-notifications",
         {
-          "color": "#5EEAD4"
+          "color": "#2E7D78"
         }
       ],
       [

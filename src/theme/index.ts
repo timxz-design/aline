@@ -1,40 +1,40 @@
 /**
- * ALINE design system
- *
- * Dark, calm, premium. Anti-addictive: no bright reds, no urgent
- * notifications, no gamification colors. Suggestion accent is cool teal.
+ * ALINE design system — "warm paper" light theme, derived from the logo:
+ * off-white with a hint of brown, deep teal as the working accent, mint for
+ * washes, periwinkle as the secondary. Calm, anti-addictive: no bright reds,
+ * no urgent notification colors, no gamification.
  */
 
 export const colors = {
-  // Surfaces
-  bg: '#0A0E1A',          // app background
-  bgElevated: '#131A2C',  // cards — separation comes from surface tone, not borders
-  bgRaised: '#1C2438',    // chips, inputs, nested surfaces
-  border: '#1F2937',
-  borderSubtle: '#161E2E',
+  // Surfaces — warm paper; cards separate by tone (white on cream), not borders
+  bg: '#F5F1EA',          // app background — off-white, hint of brown
+  bgElevated: '#FFFFFF',  // cards
+  bgRaised: '#EDE7DC',    // chips, inputs, nested surfaces
+  border: '#E2DACB',
+  borderSubtle: '#ECE6DA',
 
-  // Text
-  text: '#E5E7EB',
-  textMuted: '#9CA3AF',
-  textDim: '#6B7280',
-  textInverse: '#0A0E1A',
+  // Text — deep teal-charcoal from the wordmark
+  text: '#1C3A3B',
+  textMuted: '#5D6E6C',
+  textDim: '#93A09D',
+  textInverse: '#FFFFFF',
 
-  // Brand
-  accent: '#5EEAD4',       // teal — agent, suggestions, "coordinated"
-  accentDim: '#0F2A2A',
-  accent2: '#7C9EFF',      // indigo — secondary
-  accent2Dim: '#1A2240',
+  // Brand — from the logo mark
+  accent: '#2E7D78',       // deep teal — agent, actions, "coordinated"
+  accentDim: '#DFEDE8',    // mint wash — fills, selected states
+  accent2: '#6C8CE8',      // periwinkle — secondary
+  accent2Dim: '#E6EBFB',
 
-  // Event type colors (mirrors prototype)
-  eventFixed: '#F87171',      // red-ish — immutable obligations
-  eventFlexible: '#34D399',   // green — movable blocks
-  eventGoal: '#FBBF24',       // amber — goal work
-  eventCoordinated: '#5EEAD4',// teal — multi-agent hangouts
+  // Event type colors (deepened for light surfaces)
+  eventFixed: '#D4574E',      // warm red — immutable obligations
+  eventFlexible: '#2E9E6B',   // green — movable blocks
+  eventGoal: '#C98A00',       // amber — goal work
+  eventCoordinated: '#2E7D78',// teal — multi-agent hangouts
 
   // Status
-  success: '#34D399',
-  warning: '#FBBF24',
-  danger: '#F87171',
+  success: '#2E9E6B',
+  warning: '#C98A00',
+  danger: '#D4574E',
 } as const;
 
 export const space = {
