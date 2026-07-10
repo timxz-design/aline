@@ -157,14 +157,26 @@ export function dbscan(
     const memberSet = new Set<number>([i]);
     assigned[i] = true;
 
+    // Each point may enter the queue at most ONCE (tracked via `enqueued`),
+    // and dequeue is an O(1) head pointer, not shift(). Without both, dense
+    // clusters (thousands of home pings) re-enqueue neighbours combinatorially
+    // and the loop degenerates to ~O(m³) — which froze the whole app for
+    // minutes during recompute once enough pings accumulated.
     const queue = [...neighbours];
-    while (queue.length) {
-      const j = queue.shift()!;
+    const enqueued = new Set<number>(neighbours);
+    let head = 0;
+    while (head < queue.length) {
+      const j = queue[head++];
       if (!visited[j]) {
         visited[j] = true;
         const jNeighbours = regionQuery(j);
         if (jNeighbours.length + 1 >= minPoints) {
-          for (const k of jNeighbours) if (!memberSet.has(k)) queue.push(k);
+          for (const k of jNeighbours) {
+            if (!enqueued.has(k)) {
+              enqueued.add(k);
+              queue.push(k);
+            }
+          }
         }
       }
       if (!assigned[j]) {
