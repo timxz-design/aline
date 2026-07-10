@@ -82,29 +82,35 @@ export default function AgentScreen() {
   // out). A ref so the realtime handler (stable closure) reads the live value.
   const voiceReplyRef = useRef(false);
 
-  useEffect(() => {
+  // Initial history load. NEWEST 200 reversed for display — ascending+limit
+  // returns the OLDEST rows, which silently freezes the chat once history
+  // passes 200. Explicit columns skip the context_snapshot debug payload.
+  // The catch matters: a network hiccup here used to reject unhandled and
+  // leave the spinner up forever ("chat not loading") — now it surfaces a
+  // tap-to-retry instead.
+  const loadChat = useCallback(async () => {
     if (!user) return;
-    let cancelled = false;
-    // NEWEST 200, then reverse for display — ascending+limit returns the
-    // OLDEST rows, which silently freezes the chat once history passes 200.
-    // Explicit columns: context_snapshot is per-message debug payload the
-    // client never renders; skipping it keeps the initial load light.
-    supabase
-      .from('chat_messages')
-      .select('id, user_id, role, content, created_at, image_url, goal_plan_id, event_ids, extracted_data, model, input_tokens, output_tokens')
-      .eq('user_id', user.id)
-      .order('created_at', { ascending: false })
-      .limit(200)
-      .then(({ data, error }) => {
-        if (cancelled) return;
-        if (error) console.warn('Chat load failed:', error.message);
-        setMessages(((data ?? []) as ChatMessage[]).reverse());
-        setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
+    setError(null);
+    try {
+      const { data, error: qErr } = await supabase
+        .from('chat_messages')
+        .select('id, user_id, role, content, created_at, image_url, goal_plan_id, event_ids, extracted_data, model, input_tokens, output_tokens')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false })
+        .limit(200);
+      if (qErr) throw new Error(qErr.message);
+      setMessages(((data ?? []) as ChatMessage[]).reverse());
+    } catch (e) {
+      console.warn('Chat load failed:', e);
+      setError('Could not load the conversation — tap here to retry.');
+    } finally {
+      setLoading(false);
+    }
   }, [user]);
+
+  useEffect(() => {
+    loadChat();
+  }, [loadChat]);
 
   // Subscribe to realtime inserts so agent replies appear automatically when
   // the `agent-respond` edge function writes them server-side.
@@ -411,11 +417,21 @@ export default function AgentScreen() {
         {error ? (
           <Pressable
             style={styles.errorRow}
-            onPress={() => setError(null)}
+            onPress={() => {
+              // Load failures retry; send failures just dismiss.
+              if (messages.length === 0) {
+                setLoading(true);
+                loadChat();
+              } else {
+                setError(null);
+              }
+            }}
             hitSlop={8}
           >
             <Text style={styles.errorText}>{error}</Text>
-            <Text style={styles.errorDismiss}>Tap to dismiss</Text>
+            <Text style={styles.errorDismiss}>
+              {messages.length === 0 ? 'Tap to retry' : 'Tap to dismiss'}
+            </Text>
           </Pressable>
         ) : null}
 
