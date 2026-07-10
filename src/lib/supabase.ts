@@ -1,7 +1,7 @@
 import 'react-native-url-polyfill/auto';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createClient } from '@supabase/supabase-js';
-import { Platform } from 'react-native';
+import { AppState, Platform } from 'react-native';
 import type { Database } from '../types/database';
 
 const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
@@ -35,3 +35,19 @@ export const supabase = createClient<Database>(supabaseUrl, supabaseAnonKey, {
     detectSessionInUrl: false,
   },
 });
+
+// React Native REQUIRES explicit refresh lifecycle wiring: timers don't run
+// while iOS suspends the app, so without this the access token expires in the
+// background and every PostgREST call can hang on a stale/deadlocked refresh
+// (the "spinner forever, survives force-close" failure). Documented Supabase
+// RN pattern: refresh only while foregrounded.
+if (Platform.OS !== 'web') {
+  supabase.auth.startAutoRefresh();
+  AppState.addEventListener('change', (state) => {
+    if (state === 'active') {
+      supabase.auth.startAutoRefresh();
+    } else {
+      supabase.auth.stopAutoRefresh();
+    }
+  });
+}
