@@ -85,16 +85,20 @@ export default function AgentScreen() {
   useEffect(() => {
     if (!user) return;
     let cancelled = false;
+    // NEWEST 200, then reverse for display — ascending+limit returns the
+    // OLDEST rows, which silently freezes the chat once history passes 200.
+    // Explicit columns: context_snapshot is per-message debug payload the
+    // client never renders; skipping it keeps the initial load light.
     supabase
       .from('chat_messages')
-      .select('*')
+      .select('id, user_id, role, content, created_at, image_url, goal_plan_id, event_ids, extracted_data, model, input_tokens, output_tokens')
       .eq('user_id', user.id)
-      .order('created_at', { ascending: true })
+      .order('created_at', { ascending: false })
       .limit(200)
       .then(({ data, error }) => {
         if (cancelled) return;
         if (error) console.warn('Chat load failed:', error.message);
-        setMessages(data ?? []);
+        setMessages(((data ?? []) as ChatMessage[]).reverse());
         setLoading(false);
       });
     return () => {
