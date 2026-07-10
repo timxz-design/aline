@@ -110,7 +110,23 @@ export type RecomputeResult = {
  *
  * `force: true` skips ALL throttles and runs every stage.
  */
+const IN_FLIGHT_KEY = '@aline/recompute_in_flight';
+
 export async function maybeRecompute(opts: { force?: boolean } = {}): Promise<RecomputeResult> {
+  // Crash-loop breaker: if a previous run STARTED but never cleared this
+  // marker (hang, crash, force-close mid-run), skip the pipeline entirely on
+  // this open so a poisoned recompute can't freeze the app on every launch.
+  // The marker is cleared here, so the run after next tries again.
+  try {
+    const inFlight = await AsyncStorage.getItem(IN_FLIGHT_KEY);
+    if (inFlight) {
+      await AsyncStorage.removeItem(IN_FLIGHT_KEY);
+      captureException(new Error('recompute skipped: previous run never finished (possible hang)'));
+      return { ranAny: false, state: await readState() };
+    }
+    await AsyncStorage.setItem(IN_FLIGHT_KEY, String(Date.now()));
+  } catch { /* storage hiccup — proceed normally */ }
+
   const state = await readState();
   let ranAny = false;
   const force = opts.force === true;
@@ -132,6 +148,7 @@ export async function maybeRecompute(opts: { force?: boolean } = {}): Promise<Re
         // No pings yet → don't run downstream stages.
         if (r.pingsRead === 0) {
           await writeState(state);
+          await AsyncStorage.removeItem(IN_FLIGHT_KEY).catch(() => {});
           return { ranAny: true, state };
         }
       }
@@ -214,6 +231,7 @@ export async function maybeRecompute(opts: { force?: boolean } = {}): Promise<Re
   }
 
   await writeState(state);
+  await AsyncStorage.removeItem(IN_FLIGHT_KEY).catch(() => {});
   return { ranAny, state };
 }
 

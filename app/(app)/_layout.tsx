@@ -64,8 +64,10 @@ export default function AppLayout() {
       sessionIdRef.current = id;
     });
 
-    // Fire once now (throttle inside maybeRecompute will skip if too recent).
-    maybeRecompute();
+    // Fire once now — DEFERRED off the startup critical path (heavy JS at
+    // cold open competes with first paint/first queries; a hung stage used
+    // to freeze the whole app at launch).
+    const recomputeTimer = setTimeout(() => { maybeRecompute(); }, 8000);
     // Cold-launch location sample. The AppState 'active' handler below only
     // fires on foreground *resume*, so without this a cold open never captured
     // "where you are right now". No-ops silently if permission isn't granted
@@ -83,7 +85,7 @@ export default function AppLayout() {
         logSessionOpen(src).then((id) => {
           sessionIdRef.current = id;
         });
-        maybeRecompute();
+        setTimeout(() => { maybeRecompute(); }, 8000);
         foregroundSampleOnce(); // capture current location on app open
         syncGeofences(); // refresh monitored places (clustering may have changed them)
 
@@ -98,7 +100,7 @@ export default function AppLayout() {
         sessionIdRef.current = null;
       }
     });
-    return () => sub.remove();
+    return () => { sub.remove(); clearTimeout(recomputeTimer); };
   }, [session?.user.id]);
 
   // Register for push notifications + handle taps. Done once user has a session.
