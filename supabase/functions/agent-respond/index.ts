@@ -56,6 +56,15 @@ type GoalRow = {
   last_completed_at: string | null;
 };
 
+type HealthWorkoutRow = {
+  activity_type: string;
+  started_at: string;
+  duration_min: number | null;
+  avg_heart_rate: number | null;
+  energy_kcal: number | null;
+  match_kind: string | null;
+};
+
 type GoalPlanCycle = {
   length: number;          // days in one repeating cycle
   on: number[];            // 1-indexed positions within the cycle the session occurs
@@ -758,6 +767,7 @@ function buildSystemPromptBlocks(input: {
   liveStatuses: LiveStatusRow[];
   reminders: ReminderRow[];
   goalPlans: GoalPlanRow[];
+  healthWorkouts: HealthWorkoutRow[];
 }): { staticBlock: string; dynamicBlock: string } {
   const {
     firstName,
@@ -776,6 +786,7 @@ function buildSystemPromptBlocks(input: {
     liveStatuses,
     reminders,
     goalPlans,
+    healthWorkouts,
   } = input;
 
   const goalLines =
@@ -790,6 +801,25 @@ function buildSystemPromptBlocks(input: {
                 g.target_date ? ` · by ${g.target_date}` : ''
               } — id: ${g.id}`
           )
+          .join('\n');
+
+  // Measured workouts (HealthKit). These are EVIDENCE — the user did not type
+  // them — unlike a mark_goal_done claim. Never invent or assume them.
+  const workoutLines =
+    healthWorkouts.length === 0
+      ? 'No measured workouts recorded (either Apple Health is not connected, or none were started).'
+      : healthWorkouts
+          .map((w) => {
+            const bits = [
+              w.activity_type,
+              w.duration_min ? `${Math.round(w.duration_min)}min` : null,
+              w.avg_heart_rate ? `avg ${Math.round(w.avg_heart_rate)}bpm` : null,
+              w.energy_kcal ? `${Math.round(w.energy_kcal)}kcal` : null,
+              w.match_kind === 'unplanned' ? 'unplanned' : null,
+              w.match_kind === 'ambiguous' ? 'NOT yet counted — ask which goal it belongs to' : null,
+            ].filter(Boolean).join(' · ');
+            return `  - ${w.started_at.slice(0, 16).replace('T', ' ')} — ${bits}`;
+          })
           .join('\n');
 
   // Goal plans = the structured program attached to a goal. DRAFT = not on the
@@ -1303,6 +1333,10 @@ ${goalLines}
 Goal plans (the structured program per goal — DRAFT = not on the calendar yet, LIVE = committed):
 ${goalPlanLines}
 
+Measured workouts, last 14 days (from Apple Health — EVIDENCE, not claims; these already count toward goals automatically):
+${workoutLines}
+When the user asks whether they trained, answer from THIS list — never guess. If one is marked "NOT yet counted", ask which goal it belongs to. Do not tell the user to log workouts manually when Health is connected; only sessions they never started are missing.
+
 Known preferences:
 ${interestLines}
 
@@ -1523,6 +1557,7 @@ Deno.serve(async (req: Request) => {
     liveStatusRes,
     remindersRes,
     goalPlansRes,
+    healthWorkoutsRes,
   ] = await Promise.all([
     supabase
       .from('profiles')
@@ -1683,6 +1718,7 @@ Deno.serve(async (req: Request) => {
   const liveStatuses: LiveStatusRow[] = (liveStatusRes.data as LiveStatusRow[] | null) ?? [];
   const reminders: ReminderRow[] = (remindersRes.data as ReminderRow[] | null) ?? [];
   const goalPlans: GoalPlanRow[] = (goalPlansRes.data as GoalPlanRow[] | null) ?? [];
+  const healthWorkouts: HealthWorkoutRow[] = (healthWorkoutsRes.data as HealthWorkoutRow[] | null) ?? [];
 
   // Friends: pick "the other" profile from each friendship row.
   type FriendshipJoinRow = {
@@ -1772,6 +1808,7 @@ Deno.serve(async (req: Request) => {
     liveStatuses,
     reminders,
     goalPlans,
+    healthWorkouts,
   });
 
   // Anthropic prompt caching: cache_control on the static block. The dynamic

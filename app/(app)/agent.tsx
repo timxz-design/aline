@@ -514,6 +514,7 @@ const PROACTIVE_LABEL: Record<string, string> = {
   hangout_soon: 'Coming up',
   rsvp_nudge: 'Waiting on you',
   goal_pacing: 'Weekly goals',
+  workout_start: 'Session starting',
   morning: 'Good morning',
 };
 

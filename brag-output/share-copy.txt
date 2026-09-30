@@ -1,0 +1,3 @@
+Your calendar knows when you're free. ALINE knows what you'd actually want to do — and moves what can move so the plan actually happens.
+
+A personal AI agent for the life you have outside work. Built with Expo, Supabase and Claude.

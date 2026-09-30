@@ -16,6 +16,7 @@ import { AddFriendModal } from '../../src/components/AddFriendModal';
 import { BehavioralProfile } from '../../src/components/BehavioralProfile';
 import { Button } from '../../src/components/Button';
 import { GoogleCalendarConnect } from '../../src/components/GoogleCalendarConnect';
+import { HealthConnect } from '../../src/components/HealthConnect';
 import { Input } from '../../src/components/Input';
 import { PipelineStatus } from '../../src/components/PipelineStatus';
 import { Screen } from '../../src/components/Screen';
@@ -248,6 +249,11 @@ export default function ProfileScreen() {
         {/* Google Calendar connection */}
         <Section title="Google Calendar">
           <GoogleCalendarConnect />
+        </Section>
+
+        {/* Apple Health — evidence-grade workout completion */}
+        <Section title="Workouts">
+          <HealthConnect />
         </Section>
 
         {/* Behavioral profile — what ALINE knows about you */}

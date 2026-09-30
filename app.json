@@ -19,7 +19,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "app.aline.mvp",
-      "buildNumber": "32",
+      "buildNumber": "33",
       "infoPlist": {
         "NSCalendarsUsageDescription": "ALINE reads your calendar to coordinate hangouts with your friend groups.",
         "NSContactsUsageDescription": "ALINE uses contacts to help you invite friends to your groups.",
@@ -106,7 +106,14 @@
         }
       ],
       "expo-background-task",
-      "expo-font"
+      "expo-font",
+      [
+        "@kingstinct/react-native-healthkit",
+        {
+          "NSHealthShareUsageDescription": "ALINE reads your workouts so sessions you actually did count toward your goals — without you logging anything by hand.",
+          "NSHealthUpdateUsageDescription": false
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": false

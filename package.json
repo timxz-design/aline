@@ -11,6 +11,7 @@
   "dependencies": {
     "@expo/metro-runtime": "~6.1.2",
     "@expo/vector-icons": "^15.0.3",
+    "@kingstinct/react-native-healthkit": "^16.0.0",
     "@react-native-async-storage/async-storage": "2.2.0",
     "@sentry/react-native": "~7.13.0",
     "@supabase/supabase-js": "^2.105.0",

@@ -184,6 +184,7 @@ export type Database = {
           goal_plan_id: string | null
           google_synced_at: string | null
           hangout_id: string | null
+          health_workout_id: string | null
           id: string
           is_movable: boolean
           local_event_id: string | null
@@ -205,6 +206,7 @@ export type Database = {
           goal_plan_id?: string | null
           google_synced_at?: string | null
           hangout_id?: string | null
+          health_workout_id?: string | null
           id?: string
           is_movable?: boolean
           local_event_id?: string | null
@@ -226,6 +228,7 @@ export type Database = {
           goal_plan_id?: string | null
           google_synced_at?: string | null
           hangout_id?: string | null
+          health_workout_id?: string | null
           id?: string
           is_movable?: boolean
           local_event_id?: string | null
@@ -882,6 +885,72 @@ export type Database = {
           },
         ]
       }
+      health_workouts: {
+        Row: {
+          activity_type: string
+          avg_heart_rate: number | null
+          device: string | null
+          distance_m: number | null
+          duration_min: number | null
+          ended_at: string
+          energy_kcal: number | null
+          external_id: string
+          id: string
+          imported_at: string
+          match_kind: string | null
+          matched_event_id: string | null
+          matched_goal_id: string | null
+          max_heart_rate: number | null
+          raw_activity_type: string | null
+          reconciled_at: string | null
+          source: string
+          started_at: string
+          user_id: string
+        }
+        Insert: {
+          activity_type: string
+          avg_heart_rate?: number | null
+          device?: string | null
+          distance_m?: number | null
+          duration_min?: number | null
+          ended_at: string
+          energy_kcal?: number | null
+          external_id: string
+          id?: string
+          imported_at?: string
+          match_kind?: string | null
+          matched_event_id?: string | null
+          matched_goal_id?: string | null
+          max_heart_rate?: number | null
+          raw_activity_type?: string | null
+          reconciled_at?: string | null
+          source?: string
+          started_at: string
+          user_id: string
+        }
+        Update: {
+          activity_type?: string
+          avg_heart_rate?: number | null
+          device?: string | null
+          distance_m?: number | null
+          duration_min?: number | null
+          ended_at?: string
+          energy_kcal?: number | null
+          external_id?: string
+          id?: string
+          imported_at?: string
+          match_kind?: string | null
+          matched_event_id?: string | null
+          matched_goal_id?: string | null
+          max_heart_rate?: number | null
+          raw_activity_type?: string | null
+          reconciled_at?: string | null
+          source?: string
+          started_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       interests: {
         Row: {
           active: boolean | null
@@ -1012,6 +1081,7 @@ export type Database = {
           expo_push_token: string | null
           first_name: string | null
           handle: string | null
+          health_connected: boolean
           id: string
           onboarding_complete: boolean | null
           push_notifications_enabled: boolean
@@ -1027,6 +1097,7 @@ export type Database = {
           expo_push_token?: string | null
           first_name?: string | null
           handle?: string | null
+          health_connected?: boolean
           id: string
           onboarding_complete?: boolean | null
           push_notifications_enabled?: boolean
@@ -1042,6 +1113,7 @@ export type Database = {
           expo_push_token?: string | null
           first_name?: string | null
           handle?: string | null
+          health_connected?: boolean
           id?: string
           onboarding_complete?: boolean | null
           push_notifications_enabled?: boolean
@@ -1269,6 +1341,10 @@ export type Database = {
         Args: { _handle: string }
         Returns: string
       }
+      reconcile_health_workouts: {
+        Args: { _max?: number }
+        Returns: Json
+      }
       respond_to_friendship: {
         Args: { _action: string; _other_user: string }
         Returns: undefined
@@ -1449,6 +1525,7 @@ export type ChatMessage = Database["public"]["Tables"]["chat_messages"]["Row"]
 export type Goal = Database["public"]["Tables"]["goals"]["Row"]
 export type GoalPlan = Database["public"]["Tables"]["goal_plans"]["Row"]
 export type LocalEvent = Database["public"]["Tables"]["events"]["Row"]
+export type HealthWorkout = Database["public"]["Tables"]["health_workouts"]["Row"]
 export type Interest = Database["public"]["Tables"]["interests"]["Row"]
 export type ChangeSet = Database["public"]["Tables"]["change_sets"]["Row"]
 export type BehavioralPing = Database["public"]["Tables"]["behavioral_pings"]["Row"]
