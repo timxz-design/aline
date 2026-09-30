@@ -111,7 +111,8 @@
         "@kingstinct/react-native-healthkit",
         {
           "NSHealthShareUsageDescription": "ALINE reads your workouts so sessions you actually did count toward your goals — without you logging anything by hand.",
-          "NSHealthUpdateUsageDescription": false
+          "NSHealthUpdateUsageDescription": false,
+          "background": false
         }
       ]
     ],
