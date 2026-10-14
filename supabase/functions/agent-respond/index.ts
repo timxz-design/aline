@@ -2456,6 +2456,8 @@ async function executeTool(
       free_count: number;
       total_count: number;
       busy_user_ids: string[];
+      your_habit: string | null;
+      soft_busy_count: number;
     };
     const rows = (data ?? []) as SlotRow[];
     const idToHandle = new Map<string, string>(
@@ -2468,6 +2470,10 @@ async function executeTool(
       free_count: s.free_count,
       total_count: s.total_count,
       busy_handles: (s.busy_user_ids ?? []).map((id) => idToHandle.get(id) ?? id),
+      // Learned habit in this slot — nothing is on the calendar, but the user
+      // reliably does this then (verified activity, workouts included).
+      your_usual: s.your_habit ?? null,
+      others_usually_busy: s.soft_busy_count ?? 0,
     }));
 
     return {
@@ -2476,6 +2482,8 @@ async function executeTool(
         participant_count: userIds.length + 1,
         mode: minFreeCount === null ? 'strict' : `threshold (min ${minFreeCount} free)`,
         slots: enriched,
+        how_to_read:
+          'Slots are ranked by score. `your_usual` means nothing is on the calendar then, but the user RELIABLY does that activity in that slot (learned from verified behaviour). Prefer a clean slot when one scores close. If the best option carries `your_usual`, say so plainly and offer to move that habit rather than silently double-booking it — e.g. "Thursday 18:00 works for everyone, though that is usually your training slot. Want me to shift the session to Friday?". `others_usually_busy` is a count only: another participant typically has something on then. Factor it into your choice but NEVER name them or say what it is — that is private to them.',
       }),
     };
   }

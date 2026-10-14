@@ -47,3 +47,6 @@ yarn-error.*
 /blob-report/
 /playwright/.cache/
 /playwright/.auth/
+
+# Launch-video output (7.5MB of generated artifacts, regenerate with /brag)
+brag-output/
