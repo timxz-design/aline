@@ -17,8 +17,10 @@
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import NetInfo, { NetInfoStateType } from '@react-native-community/netinfo';
 import * as BackgroundTask from 'expo-background-task';
 import * as Battery from 'expo-battery';
+import * as Crypto from 'expo-crypto';
 import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
 import { Platform } from 'react-native';
@@ -83,6 +85,53 @@ async function readBattery(): Promise<{ level: number | null; state: string }> {
   }
 }
 
+// iOS only returns the SSID/BSSID with the Access WiFi Information entitlement
+// AND location permission — both of which ALINE has.
+NetInfo.configure({ shouldFetchWiFiSSID: true });
+
+// App-wide salt (not per-user): the same router must hash identically for every
+// user, so two people on one network can be recognised as together. Raw network
+// names and MACs never leave the device.
+const WIFI_SALT = 'aline-wifi-v1:';
+// iOS returns this placeholder BSSID when it won't reveal the real one.
+const BLANK_BSSIDS = new Set(['02:00:00:00:00:00', '00:00:00:00:00:00']);
+
+async function hashWifi(value: string | null | undefined): Promise<string | null> {
+  const v = value?.trim().toLowerCase();
+  if (!v || BLANK_BSSIDS.has(v)) return null;
+  return Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, WIFI_SALT + v);
+}
+
+/**
+ * Network context at capture: on Wi-Fi usually means "at a place", cellular
+ * means "out". The hashed BSSID fingerprints the exact access point — a
+ * room-level location that keeps working indoors where GPS drifts.
+ */
+async function readNetwork(): Promise<{
+  network_type: string;
+  wifi_bssid_hash: string | null;
+  wifi_ssid_hash: string | null;
+}> {
+  try {
+    const state = await NetInfo.fetch();
+    const network_type =
+      state.type === NetInfoStateType.wifi ? 'wifi'
+        : state.type === NetInfoStateType.cellular ? 'cellular'
+          : state.type === NetInfoStateType.none ? 'none'
+            : 'other';
+    if (state.type !== NetInfoStateType.wifi) {
+      return { network_type, wifi_bssid_hash: null, wifi_ssid_hash: null };
+    }
+    const [wifi_bssid_hash, wifi_ssid_hash] = await Promise.all([
+      hashWifi(state.details.bssid),
+      hashWifi(state.details.ssid),
+    ]);
+    return { network_type, wifi_bssid_hash, wifi_ssid_hash };
+  } catch {
+    return { network_type: 'other', wifi_bssid_hash: null, wifi_ssid_hash: null };
+  }
+}
+
 /** Raw speed worth storing: valid readings only (see motionFromSpeed). */
 function validSpeed(speed: number | null | undefined): number | null {
   return speed == null || !Number.isFinite(speed) || speed < 0 ? null : speed;
@@ -125,7 +174,7 @@ async function recordPing(
     const { data: { session } } = await supabase.auth.getSession();
     if (!session) return;
 
-    const battery = await readBattery();
+    const [battery, network] = await Promise.all([readBattery(), readNetwork()]);
     const { error: insertErr } = await supabase.from('behavioral_pings').insert([{
       user_id: session.user.id,
       captured_at: new Date(capturedAtMs).toISOString(),
@@ -134,6 +183,7 @@ async function recordPing(
       speed_mps: speedMps,
       battery_level: battery.level,
       battery_state: battery.state,
+      ...network,
       source,
     }]);
     if (insertErr) {

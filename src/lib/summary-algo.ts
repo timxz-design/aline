@@ -8,7 +8,7 @@
  *   - waketime_minute:   median wake time across days (from app_sessions)
  *   - bedtime_minute:    median bedtime across days   (from app_sessions)
  *   - weekly_workout_count: sum of `consistency` over gym-category routines
- *   - avg_daily_steps:   placeholder (filled by HealthKit/Fit in Step 5)
+ *   - avg_daily_steps:   measured (pedometer step_counts), else null
  *   - data_quality:      none | low | medium | high
  *   - archetype_text:    one-line description for the agent system prompt
  *
@@ -121,6 +121,8 @@ export function computeSummary(
   places: SummaryPlace[],
   routines: SummaryRoutine[],
   sleep: SummarySleep | null,
+  /** Measured signals (pedometer, HealthKit) — override the inferred ones. */
+  measured: { avg_daily_steps?: number | null; weekly_workout_count?: number | null } = {},
 ): BehavioralSummary {
   // Distinct days still derived from pings (drives data_quality alongside
   // place count). Days observed via app sessions is a separate signal.
@@ -155,7 +157,9 @@ export function computeSummary(
   // A 1.0-consistency Tue routine + 1.0-consistency Thu routine = 2 workouts/week.
   const gymRoutines = routines.filter((r) => r.category === 'gym');
   const weekly_workout_count =
-    gymRoutines.length > 0
+    measured.weekly_workout_count != null
+      ? measured.weekly_workout_count
+      : gymRoutines.length > 0
       ? Math.round(
           gymRoutines.reduce((s, r) => s + r.consistency, 0) * 10,
         ) / 10
@@ -166,7 +170,7 @@ export function computeSummary(
     bedtime_minute,
     waketime_minute,
     weekly_workout_count,
-    avg_daily_steps: null as number | null,
+    avg_daily_steps: measured.avg_daily_steps ?? null,
     data_quality,
   };
 

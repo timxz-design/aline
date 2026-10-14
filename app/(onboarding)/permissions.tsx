@@ -11,6 +11,7 @@ import { Screen } from '../../src/components/Screen';
 import { useAuth } from '../../src/lib/auth-context';
 import { requestLocationPermissions } from '../../src/lib/backgroundGps';
 import { connectDeviceCalendar } from '../../src/lib/device-calendar';
+import { hasHealthAuthorization, isHealthAvailable, requestHealthAuthorization } from '../../src/lib/health';
 import { useOnboarding } from '../../src/lib/onboarding-context';
 import { registerForPushNotifications } from '../../src/lib/push-notifications';
 import { ensureMotionPermission } from '../../src/lib/signals';
@@ -26,7 +27,7 @@ import { colors, font, radius, space } from '../../src/theme';
  */
 
 type ItemState = 'on' | 'partial' | 'off';
-type Key = 'location' | 'calendar' | 'motion' | 'notifications';
+type Key = 'location' | 'calendar' | 'motion' | 'health' | 'notifications';
 
 const ITEMS: { key: Key; title: string; why: string }[] = [
   {
@@ -45,6 +46,11 @@ const ITEMS: { key: Key; title: string; why: string }[] = [
     why: 'Step counts tell walking from sitting, even while the app is closed.',
   },
   {
+    key: 'health',
+    title: 'Apple Health',
+    why: 'Workouts you actually did and when you sleep — measured, so nothing needs logging.',
+  },
+  {
     key: 'notifications',
     title: 'Notifications',
     why: 'So friends\' plans and "leave now" nudges actually reach you.',
@@ -52,17 +58,21 @@ const ITEMS: { key: Key; title: string; why: string }[] = [
 ];
 
 async function readStates(): Promise<Record<Key, ItemState>> {
-  const [fg, bg, cal, motion, notif] = await Promise.all([
+  const [fg, bg, cal, motion, notif, healthOn] = await Promise.all([
     Location.getForegroundPermissionsAsync().catch(() => null),
     Location.getBackgroundPermissionsAsync().catch(() => null),
     Calendar.getCalendarPermissionsAsync().catch(() => null),
     Pedometer.getPermissionsAsync().catch(() => null),
     Notifications.getPermissionsAsync().catch(() => null),
+    // HealthKit never reveals read-access status; this is our own record of
+    // the user having completed the Health sheet.
+    hasHealthAuthorization(),
   ]);
   return {
     location: bg?.granted ? 'on' : fg?.granted ? 'partial' : 'off',
     calendar: cal?.granted ? 'on' : 'off',
     motion: motion?.granted ? 'on' : 'off',
+    health: healthOn ? 'on' : 'off',
     notifications: notif?.granted ? 'on' : 'off',
   };
 }
@@ -73,6 +83,9 @@ export default function OnboardingPermissions() {
   const { refresh } = useProfile();
   const { complete } = useOnboarding();
   const [states, setStates] = useState<Record<Key, ItemState> | null>(null);
+  const [healthAvailable, setHealthAvailable] = useState(true);
+  useEffect(() => { isHealthAvailable().then(setHealthAvailable); }, []);
+  const items = ITEMS.filter((i) => i.key !== 'health' || healthAvailable);
   const [busy, setBusy] = useState<Key | 'all' | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -96,6 +109,7 @@ export default function OnboardingPermissions() {
     if (key === 'location') await requestLocationPermissions();
     if (key === 'calendar') await connectDeviceCalendar();
     if (key === 'motion') await ensureMotionPermission();
+    if (key === 'health') await requestHealthAuthorization();
     if (key === 'notifications') await registerForPushNotifications();
   };
 
@@ -108,7 +122,7 @@ export default function OnboardingPermissions() {
 
   const onAll = async () => {
     setBusy('all');
-    for (const item of ITEMS) {
+    for (const item of items) {
       const current = (await readStates())[item.key];
       if (current === 'off' && !(await alreadyAnswered(item.key))) await enable(item.key);
     }
@@ -130,7 +144,7 @@ export default function OnboardingPermissions() {
     router.replace('/(app)/agent');
   };
 
-  const allOn = states ? ITEMS.every((i) => states[i.key] === 'on') : false;
+  const allOn = states ? items.every((i) => states[i.key] === 'on') : false;
 
   return (
     <Screen>
@@ -145,7 +159,7 @@ export default function OnboardingPermissions() {
       </View>
 
       <View style={styles.list}>
-        {ITEMS.map((item) => {
+        {items.map((item) => {
           const s = states?.[item.key] ?? 'off';
           return (
             <Pressable
@@ -190,6 +204,7 @@ export default function OnboardingPermissions() {
 /** True when iOS has already shown (and the user answered) this prompt. */
 async function alreadyAnswered(key: Key): Promise<boolean> {
   if (Platform.OS === 'web') return true;
+  if (key === 'health') return false; // the Health sheet can always be re-shown
   const res =
     key === 'location' ? await Location.getForegroundPermissionsAsync().catch(() => null)
       : key === 'calendar' ? await Calendar.getCalendarPermissionsAsync().catch(() => null)

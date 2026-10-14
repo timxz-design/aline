@@ -8,6 +8,7 @@ import { useAuth } from '../../src/lib/auth-context';
 import { maybeRecompute } from '../../src/lib/auto-recompute';
 import { foregroundSampleOnce, startBackgroundGps, stopBackgroundGps, syncGeofences } from '../../src/lib/backgroundGps';
 import { syncDeviceCalendar } from '../../src/lib/device-calendar';
+import { syncHealth } from '../../src/lib/health';
 import {
   registerForPushNotifications,
   routeForNotification,
@@ -78,6 +79,7 @@ export default function AppLayout() {
       maybeRecompute();
       syncDeviceCalendar();
       ensureMotionPermission().then(() => syncSteps());
+      syncHealth(); // no-op until Apple Health is connected
       reportCollectionHealth();
     }, 8000);
     // Cold-launch location sample. The AppState 'active' handler below only
@@ -101,6 +103,7 @@ export default function AppLayout() {
           maybeRecompute();
           syncDeviceCalendar();
           syncSteps();
+          syncHealth();
           reportCollectionHealth();
         }, 8000);
         foregroundSampleOnce(); // capture current location on app open

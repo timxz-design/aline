@@ -20,6 +20,9 @@
       "supportsTablet": true,
       "bundleIdentifier": "app.aline.mvp",
       "usesAppleSignIn": true,
+      "entitlements": {
+        "com.apple.developer.networking.wifi-info": true
+      },
       "buildNumber": "35",
       "infoPlist": {
         "NSCalendarsUsageDescription": "ALINE reads your calendar to coordinate hangouts with your friend groups.",
@@ -107,6 +110,13 @@
         }
       ],
       "expo-apple-authentication",
+      [
+        "@kingstinct/react-native-healthkit",
+        {
+          "NSHealthShareUsageDescription": "ALINE reads your workouts and sleep so sessions you actually did count toward your goals, and your agent knows when you're asleep — without you logging anything.",
+          "NSHealthUpdateUsageDescription": false
+        }
+      ],
       "expo-background-task",
       [
         "expo-sensors",

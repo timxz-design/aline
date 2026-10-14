@@ -210,3 +210,85 @@ export function inferSleep(input: SleepInferenceInput): SleepInferenceResult {
     days_observed,
   };
 }
+
+// ---------- HealthKit sleep (measured) ---------------------------------------
+
+export type HealthSleepInterval = {
+  stage: string; // in_bed | asleep | awake | core | deep | rem
+  started_at: string; // ISO UTC
+  ended_at: string;
+};
+
+const ASLEEP_STAGES = new Set(['asleep', 'core', 'deep', 'rem']);
+
+/**
+ * Bed/wake from HealthKit sleep analysis — measured, so it outranks the
+ * app-session guess whenever it exists.
+ *
+ *   night     = intervals grouped by local day of (start − 12h), so one night
+ *               spanning midnight stays together; starts between 12:00 and
+ *               18:00 are naps and ignored
+ *   bed/wake  = earliest asleep start / latest asleep end per night (falls
+ *               back to in_bed when a source only records time in bed)
+ *   medians   = bedtime median taken around noon so 23:30 and 00:30 average
+ *               to midnight, not midday
+ *
+ * Quality is by nights, with lower bars than app sessions because each night
+ * is a direct measurement: ≥3 nights high, ≥1 medium.
+ */
+export function inferSleepFromHealth(
+  intervals: HealthSleepInterval[],
+  timezone: string,
+): SleepInferenceResult {
+  type Night = { asleep: [number, number][]; inBed: [number, number][] };
+  const nights = new Map<string, Night>();
+
+  for (const iv of intervals) {
+    const startMin = localMinuteOfDay(iv.started_at, timezone);
+    if (startMin >= 12 * 60 && startMin < 18 * 60) continue; // daytime nap
+    const start = new Date(iv.started_at).getTime();
+    const end = new Date(iv.ended_at).getTime();
+    if (!(end > start)) continue;
+    const key = localDayKey(new Date(start - 12 * 3600_000).toISOString(), timezone);
+    const n = nights.get(key) ?? { asleep: [], inBed: [] };
+    if (ASLEEP_STAGES.has(iv.stage)) n.asleep.push([start, end]);
+    else if (iv.stage === 'in_bed') n.inBed.push([start, end]);
+    nights.set(key, n);
+  }
+
+  const bedFromNoon: number[] = [];
+  const wakeMinutes: number[] = [];
+  for (const n of nights.values()) {
+    const spans = n.asleep.length > 0 ? n.asleep : n.inBed;
+    if (spans.length === 0) continue;
+    const bed = Math.min(...spans.map((s) => s[0]));
+    const wake = Math.max(...spans.map((s) => s[1]));
+    if (wake - bed < 2 * 3600_000) continue; // not a night's sleep
+    bedFromNoon.push((localMinuteOfDay(new Date(bed).toISOString(), timezone) + 12 * 60) % 1440);
+    wakeMinutes.push(localMinuteOfDay(new Date(wake).toISOString(), timezone));
+  }
+
+  const nightsObserved = wakeMinutes.length;
+  if (nightsObserved === 0) {
+    return { bedtime_minute: null, waketime_minute: null, chronotype: null, data_quality: 'low', days_observed: 0 };
+  }
+
+  const bedtime_minute = (median(bedFromNoon) + 12 * 60) % 1440;
+  const waketime_minute = median(wakeMinutes);
+
+  // Measured wake has no app-open lag, so the late-riser cutoff is 9:30.
+  const earlyWake = waketime_minute < 7 * 60;
+  const earlyBed = bedtime_minute < 23 * 60 && bedtime_minute >= 12 * 60;
+  const lateWake = waketime_minute > 9 * 60 + 30;
+  const lateBed = bedtime_minute < 4 * 60;
+  const chronotype: SleepInferenceResult['chronotype'] =
+    earlyWake && earlyBed ? 'early_bird' : lateWake || lateBed ? 'night_owl' : 'balanced';
+
+  return {
+    bedtime_minute,
+    waketime_minute,
+    chronotype,
+    data_quality: nightsObserved >= 3 ? 'high' : 'medium',
+    days_observed: nightsObserved,
+  };
+}

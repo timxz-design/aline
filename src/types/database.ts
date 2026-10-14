@@ -113,9 +113,12 @@ export type Database = {
           geohash_8: string
           id: string
           motion_state: string | null
+          network_type: string | null
           source: string | null
           speed_mps: number | null
           user_id: string
+          wifi_bssid_hash: string | null
+          wifi_ssid_hash: string | null
         }
         Insert: {
           battery_level?: number | null
@@ -125,9 +128,12 @@ export type Database = {
           geohash_8: string
           id?: string
           motion_state?: string | null
+          network_type?: string | null
           source?: string | null
           speed_mps?: number | null
           user_id: string
+          wifi_bssid_hash?: string | null
+          wifi_ssid_hash?: string | null
         }
         Update: {
           battery_level?: number | null
@@ -137,9 +143,12 @@ export type Database = {
           geohash_8?: string
           id?: string
           motion_state?: string | null
+          network_type?: string | null
           source?: string | null
           speed_mps?: number | null
           user_id?: string
+          wifi_bssid_hash?: string | null
+          wifi_ssid_hash?: string | null
         }
         Relationships: []
       }
@@ -962,6 +971,39 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      health_sleep: {
+        Row: {
+          created_at: string
+          ended_at: string
+          external_id: string
+          id: string
+          source_name: string | null
+          stage: string
+          started_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          ended_at: string
+          external_id: string
+          id?: string
+          source_name?: string | null
+          stage: string
+          started_at: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          ended_at?: string
+          external_id?: string
+          id?: string
+          source_name?: string | null
+          stage?: string
+          started_at?: string
+          user_id?: string
+        }
+        Relationships: []
       }
       health_workouts: {
         Row: {
