@@ -17,7 +17,6 @@ import { BehavioralProfile } from '../../src/components/BehavioralProfile';
 import { Button } from '../../src/components/Button';
 import { DeviceCalendarConnect } from '../../src/components/DeviceCalendarConnect';
 import { GoogleCalendarConnect } from '../../src/components/GoogleCalendarConnect';
-import { HealthConnect } from '../../src/components/HealthConnect';
 import { Input } from '../../src/components/Input';
 import { PipelineStatus } from '../../src/components/PipelineStatus';
 import { Screen } from '../../src/components/Screen';
@@ -254,11 +253,6 @@ export default function ProfileScreen() {
             <DeviceCalendarConnect />
             <GoogleCalendarConnect />
           </View>
-        </Section>
-
-        {/* Apple Health — measured workouts + sleep */}
-        <Section title="Apple Health">
-          <HealthConnect />
         </Section>
 
         {/* Behavioral profile — what ALINE knows about you */}

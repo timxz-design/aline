@@ -76,20 +76,22 @@ const ACTIVITY_FAMILY: Record<number, string> = {
   63: 'hiit',       // highIntensityIntervalTraining
 };
 
-type HKModule = typeof import('@kingstinct/react-native-healthkit');
-let modulePromise: Promise<HKModule | null> | null = null;
+// The native HealthKit binding is not in this build: @kingstinct v16 runs on
+// NitroModules, which fails to compile against RN 0.81 on the old architecture
+// (glog module error, build 35). Until a binding that builds is wired back in,
+// getHK() reports HealthKit as unavailable — every entry point below then
+// no-ops, and the UI hides the Health row. The ledger code stays as-is.
+type HKModule = {
+  isHealthDataAvailable(): boolean;
+  requestAuthorization(o: { toRead: readonly string[] }): Promise<unknown>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  queryWorkoutSamples(o: unknown): Promise<any[]>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  queryCategorySamples(id: string, o: unknown): Promise<readonly any[]>;
+};
 
-/** Load the native module lazily. iOS-only, and a failure here must never
- *  take the app down — it just means health sync is unavailable. */
 async function getHK(): Promise<HKModule | null> {
-  if (Platform.OS !== 'ios') return null;
-  if (!modulePromise) {
-    modulePromise = import('@kingstinct/react-native-healthkit').catch((e) => {
-      console.warn('[health] native module unavailable:', e);
-      return null;
-    });
-  }
-  return modulePromise;
+  return null;
 }
 
 /** Is HealthKit usable on this device at all? */
