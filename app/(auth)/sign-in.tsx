@@ -7,6 +7,7 @@ import {
   Text,
   View,
 } from 'react-native';
+import { AppleSignInButton } from '../../src/components/AppleSignInButton';
 import { Button } from '../../src/components/Button';
 import { Input } from '../../src/components/Input';
 import { Screen } from '../../src/components/Screen';
@@ -49,6 +50,7 @@ export default function SignIn() {
         </View>
 
         <View style={styles.form}>
+          <AppleSignInButton />
           <Input
             label="Email"
             placeholder="you@example.com"

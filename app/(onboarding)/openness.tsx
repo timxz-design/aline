@@ -1,44 +1,21 @@
 import { useRouter } from 'expo-router';
-import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { BackChevron } from '../../src/components/BackChevron';
 import { Button } from '../../src/components/Button';
 import { Screen } from '../../src/components/Screen';
-import { useAuth } from '../../src/lib/auth-context';
 import { useOnboarding } from '../../src/lib/onboarding-context';
 import { OPENNESS_OPTIONS } from '../../src/lib/onboarding-data';
-import { useProfile } from '../../src/lib/use-profile';
 import { colors, font, radius, space } from '../../src/theme';
 
 export default function OnboardingOpenness() {
   const router = useRouter();
-  const { user } = useAuth();
-  const { refresh } = useProfile();
-  const { socialOpenness, setSocialOpenness, complete } = useOnboarding();
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const finish = async () => {
-    if (!user) return;
-    setSubmitting(true);
-    setError(null);
-    const { error: completeErr } = await complete(user.id);
-    setSubmitting(false);
-    if (completeErr) {
-      setError(completeErr.message);
-      return;
-    }
-    // Refresh profile so the auth gate redirects us into the app.
-    await refresh();
-    // Land on the agent tab, matching the "meet your agent" promise.
-    router.replace('/(app)/agent');
-  };
+  const { socialOpenness, setSocialOpenness } = useOnboarding();
 
   return (
     <Screen>
       <BackChevron />
       <View style={styles.header}>
-        <Text style={styles.step}>3 of 3</Text>
+        <Text style={styles.step}>3 of 4</Text>
         <Text style={styles.title}>How social are you feeling?</Text>
         <Text style={styles.sub}>
           This sets my default. I won't push past it. You can change it anytime
@@ -75,10 +52,8 @@ export default function OnboardingOpenness() {
         })}
       </View>
 
-      {error ? <Text style={styles.errorText}>{error}</Text> : null}
-
       <View style={styles.footer}>
-        <Button label="Done — meet your agent" onPress={finish} loading={submitting} />
+        <Button label="Continue" onPress={() => router.push('/(onboarding)/permissions')} />
       </View>
     </Screen>
   );
@@ -142,6 +117,5 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     paddingLeft: 30,
   },
-  errorText: { color: colors.danger, fontSize: 13, textAlign: 'center' },
   footer: { paddingBottom: space.xxl },
 });

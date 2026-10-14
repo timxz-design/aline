@@ -18,7 +18,7 @@ export default function OnboardingInterests() {
     <Screen>
       <BackChevron />
       <View style={styles.header}>
-        <Text style={styles.step}>2 of 3</Text>
+        <Text style={styles.step}>2 of 4</Text>
         <Text style={styles.title}>What are you into?</Text>
         <Text style={styles.sub}>
           Tap whatever fits. No pressure to be exhaustive — pick a few that feel

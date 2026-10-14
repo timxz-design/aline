@@ -88,7 +88,7 @@ export default function OnboardingHandle() {
       >
         <BackChevron />
         <View style={styles.header}>
-          <Text style={styles.step}>1 of 3</Text>
+          <Text style={styles.step}>1 of 4</Text>
           <Text style={styles.title}>Pick a handle</Text>
           <Text style={styles.sub}>
             How friends find and add you. Like a username — short and unique.
