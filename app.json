@@ -19,7 +19,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "app.aline.mvp",
-      "buildNumber": "33",
+      "buildNumber": "34",
       "infoPlist": {
         "NSCalendarsUsageDescription": "ALINE reads your calendar to coordinate hangouts with your friend groups.",
         "NSContactsUsageDescription": "ALINE uses contacts to help you invite friends to your groups.",
@@ -106,6 +106,12 @@
         }
       ],
       "expo-background-task",
+      [
+        "expo-sensors",
+        {
+          "motionPermission": "ALINE counts your steps to understand your day — when you're out walking versus at your desk — so it can plan around how you actually live."
+        }
+      ],
       "expo-font"
     ],
     "experiments": {

@@ -107,6 +107,7 @@ export type Database = {
       behavioral_pings: {
         Row: {
           battery_level: number | null
+          battery_state: string | null
           captured_at: string
           created_at: string
           geohash_8: string
@@ -118,6 +119,7 @@ export type Database = {
         }
         Insert: {
           battery_level?: number | null
+          battery_state?: string | null
           captured_at: string
           created_at?: string
           geohash_8: string
@@ -129,6 +131,7 @@ export type Database = {
         }
         Update: {
           battery_level?: number | null
+          battery_state?: string | null
           captured_at?: string
           created_at?: string
           geohash_8?: string
@@ -173,6 +176,78 @@ export type Database = {
           user_id?: string
           waketime_minute?: number | null
           weekly_workout_count?: number | null
+        }
+        Relationships: []
+      }
+      collection_health: {
+        Row: {
+          app_build: string | null
+          background_refresh: string | null
+          calendar_permission: string | null
+          geofencing_running: boolean | null
+          last_steps_synced_hour: string | null
+          location_bg: string | null
+          location_fg: string | null
+          location_precise: boolean | null
+          location_task_running: boolean | null
+          motion_permission: string | null
+          os_version: string | null
+          periodic_task_registered: boolean | null
+          reported_at: string
+          user_id: string
+        }
+        Insert: {
+          app_build?: string | null
+          background_refresh?: string | null
+          calendar_permission?: string | null
+          geofencing_running?: boolean | null
+          last_steps_synced_hour?: string | null
+          location_bg?: string | null
+          location_fg?: string | null
+          location_precise?: boolean | null
+          location_task_running?: boolean | null
+          motion_permission?: string | null
+          os_version?: string | null
+          periodic_task_registered?: boolean | null
+          reported_at?: string
+          user_id: string
+        }
+        Update: {
+          app_build?: string | null
+          background_refresh?: string | null
+          calendar_permission?: string | null
+          geofencing_running?: boolean | null
+          last_steps_synced_hour?: string | null
+          location_bg?: string | null
+          location_fg?: string | null
+          location_precise?: boolean | null
+          location_task_running?: boolean | null
+          motion_permission?: string | null
+          os_version?: string | null
+          periodic_task_registered?: boolean | null
+          reported_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      step_counts: {
+        Row: {
+          hour_start: string
+          steps: number
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          hour_start: string
+          steps: number
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          hour_start?: string
+          steps?: number
+          updated_at?: string
+          user_id?: string
         }
         Relationships: []
       }

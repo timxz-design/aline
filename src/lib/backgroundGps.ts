@@ -18,6 +18,7 @@
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as BackgroundTask from 'expo-background-task';
+import * as Battery from 'expo-battery';
 import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
 import { Platform } from 'react-native';
@@ -57,6 +58,29 @@ function motionFromSpeed(speed: number | null | undefined): MotionState {
   if (speed < 1.5) return 'walking';
   if (speed <= 7) return 'active';
   return 'driving';
+}
+
+/**
+ * Battery level (0–1) + charging state at capture. Charging overnight is a
+ * strong asleep-at-home signal; unplugging marks waking up. Never throws.
+ */
+async function readBattery(): Promise<{ level: number | null; state: string }> {
+  try {
+    const [level, state] = await Promise.all([
+      Battery.getBatteryLevelAsync(),
+      Battery.getBatteryStateAsync(),
+    ]);
+    return {
+      level: level >= 0 ? level : null,
+      state:
+        state === Battery.BatteryState.UNPLUGGED ? 'unplugged'
+          : state === Battery.BatteryState.CHARGING ? 'charging'
+            : state === Battery.BatteryState.FULL ? 'full'
+              : 'unknown',
+    };
+  } catch {
+    return { level: null, state: 'unknown' };
+  }
 }
 
 /** Raw speed worth storing: valid readings only (see motionFromSpeed). */
@@ -101,13 +125,15 @@ async function recordPing(
     const { data: { session } } = await supabase.auth.getSession();
     if (!session) return;
 
+    const battery = await readBattery();
     const { error: insertErr } = await supabase.from('behavioral_pings').insert([{
       user_id: session.user.id,
       captured_at: new Date(capturedAtMs).toISOString(),
       geohash_8: encodeGeohash(lat, lon, 8),
       motion_state: motionState,
       speed_mps: speedMps,
-      battery_level: null as number | null,
+      battery_level: battery.level,
+      battery_state: battery.state,
       source,
     }]);
     if (insertErr) {

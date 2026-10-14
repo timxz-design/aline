@@ -6,12 +6,13 @@ import { AppState, Text, View, type AppStateStatus } from 'react-native';
 import { logSessionClose, logSessionOpen, type SessionSource } from '../../src/lib/app-sessions';
 import { useAuth } from '../../src/lib/auth-context';
 import { maybeRecompute } from '../../src/lib/auto-recompute';
-import { syncDeviceCalendar } from '../../src/lib/device-calendar';
 import { foregroundSampleOnce, startBackgroundGps, stopBackgroundGps, syncGeofences } from '../../src/lib/backgroundGps';
+import { syncDeviceCalendar } from '../../src/lib/device-calendar';
 import {
   registerForPushNotifications,
   routeForNotification,
 } from '../../src/lib/push-notifications';
+import { ensureMotionPermission, reportCollectionHealth, syncSteps } from '../../src/lib/signals';
 import { useProfile } from '../../src/lib/use-profile';
 import { colors, space } from '../../src/theme';
 
@@ -71,9 +72,13 @@ export default function AppLayout() {
     // Device calendar import rides the same deferred slot (no-ops without
     // permission; throttled to once per 15 min). Google is kept fresh by the
     // google_calendar_sync_30min cron, so it needs no client trigger here.
+    // Same slot: step backfill (asks for Motion access once) and the
+    // collection-health heartbeat.
     const recomputeTimer = setTimeout(() => {
       maybeRecompute();
       syncDeviceCalendar();
+      ensureMotionPermission().then(() => syncSteps());
+      reportCollectionHealth();
     }, 8000);
     // Cold-launch location sample. The AppState 'active' handler below only
     // fires on foreground *resume*, so without this a cold open never captured
@@ -92,7 +97,12 @@ export default function AppLayout() {
         logSessionOpen(src).then((id) => {
           sessionIdRef.current = id;
         });
-        setTimeout(() => { maybeRecompute(); syncDeviceCalendar(); }, 8000);
+        setTimeout(() => {
+          maybeRecompute();
+          syncDeviceCalendar();
+          syncSteps();
+          reportCollectionHealth();
+        }, 8000);
         foregroundSampleOnce(); // capture current location on app open
         syncGeofences(); // refresh monitored places (clustering may have changed them)
 
