@@ -6,6 +6,7 @@ import { AppState, Text, View, type AppStateStatus } from 'react-native';
 import { logSessionClose, logSessionOpen, type SessionSource } from '../../src/lib/app-sessions';
 import { useAuth } from '../../src/lib/auth-context';
 import { maybeRecompute } from '../../src/lib/auto-recompute';
+import { syncDeviceCalendar } from '../../src/lib/device-calendar';
 import { foregroundSampleOnce, startBackgroundGps, stopBackgroundGps, syncGeofences } from '../../src/lib/backgroundGps';
 import {
   registerForPushNotifications,
@@ -67,8 +68,12 @@ export default function AppLayout() {
     // Fire once now — DEFERRED off the startup critical path (heavy JS at
     // cold open competes with first paint/first queries; a hung stage used
     // to freeze the whole app at launch).
+    // Device calendar import rides the same deferred slot (no-ops without
+    // permission; throttled to once per 15 min). Google is kept fresh by the
+    // google_calendar_sync_30min cron, so it needs no client trigger here.
     const recomputeTimer = setTimeout(() => {
       maybeRecompute();
+      syncDeviceCalendar();
     }, 8000);
     // Cold-launch location sample. The AppState 'active' handler below only
     // fires on foreground *resume*, so without this a cold open never captured
@@ -87,7 +92,7 @@ export default function AppLayout() {
         logSessionOpen(src).then((id) => {
           sessionIdRef.current = id;
         });
-        setTimeout(() => { maybeRecompute(); }, 8000);
+        setTimeout(() => { maybeRecompute(); syncDeviceCalendar(); }, 8000);
         foregroundSampleOnce(); // capture current location on app open
         syncGeofences(); // refresh monitored places (clustering may have changed them)
 

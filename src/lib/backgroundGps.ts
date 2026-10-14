@@ -42,6 +42,28 @@ const GEOFENCE_SYNC_KEY = 'aline_geofence_region_ids'; // skip redundant re-sync
 /** Origin of a behavioral ping — provenance for evidence weighting. */
 type PingSource = 'movement' | 'periodic' | 'foreground' | 'geofence';
 
+type MotionState = 'stationary' | 'walking' | 'active' | 'driving' | 'unknown';
+
+/**
+ * Bucket the OS-reported ground speed (m/s). iOS reports -1 (and Android may
+ * report null/0 without a GPS fix) when speed is invalid — e.g. Wi-Fi/cell fixes
+ * at Balanced accuracy — so negative/missing → unknown, never stationary.
+ * 1.5–7 m/s is running OR cycling; speed alone can't tell them apart, so it's
+ * 'active' rather than a guess.
+ */
+function motionFromSpeed(speed: number | null | undefined): MotionState {
+  if (speed == null || !Number.isFinite(speed) || speed < 0) return 'unknown';
+  if (speed < 0.3) return 'stationary';
+  if (speed < 1.5) return 'walking';
+  if (speed <= 7) return 'active';
+  return 'driving';
+}
+
+/** Raw speed worth storing: valid readings only (see motionFromSpeed). */
+function validSpeed(speed: number | null | undefined): number | null {
+  return speed == null || !Number.isFinite(speed) || speed < 0 ? null : speed;
+}
+
 // Minimum time between uploaded pings, regardless of how often iOS fires the
 // task. iOS ignores the timeInterval option (Android-only) and fires on every
 // 200m crossed — which at highway speeds is every ~7s. Place clustering only
@@ -63,7 +85,8 @@ async function recordPing(
   capturedAtMs: number,
   force = false,
   source: PingSource = 'movement',
-  motionState: string = 'unknown',
+  speedMps: number | null = null,
+  motionState: MotionState = motionFromSpeed(speedMps),
 ): Promise<void> {
   try {
     const now = Date.now();
@@ -83,6 +106,7 @@ async function recordPing(
       captured_at: new Date(capturedAtMs).toISOString(),
       geohash_8: encodeGeohash(lat, lon, 8),
       motion_state: motionState,
+      speed_mps: speedMps,
       battery_level: null as number | null,
       source,
     }]);
@@ -105,7 +129,10 @@ TaskManager.defineTask(BACKGROUND_LOCATION_TASK, async ({ data, error }) => {
   const { locations } = data as { locations: Location.LocationObject[] };
   if (!locations?.length) return;
   const loc = locations[0];
-  await recordPing(loc.coords.latitude, loc.coords.longitude, loc.timestamp);
+  await recordPing(
+    loc.coords.latitude, loc.coords.longitude, loc.timestamp, false, 'movement',
+    validSpeed(loc.coords.speed),
+  );
 });
 
 // Periodic timer task (expo-background-task / iOS BGTaskScheduler): fires on the
@@ -116,7 +143,7 @@ TaskManager.defineTask(PERIODIC_LOCATION_TASK, async () => {
     const { status } = await Location.getForegroundPermissionsAsync();
     if (status !== 'granted') return BackgroundTask.BackgroundTaskResult.Success;
     const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-    await recordPing(loc.coords.latitude, loc.coords.longitude, loc.timestamp, true, 'periodic');
+    await recordPing(loc.coords.latitude, loc.coords.longitude, loc.timestamp, true, 'periodic', validSpeed(loc.coords.speed));
   } catch (e) {
     console.warn('[ALINE GPS] Periodic task exception:', e);
   }
@@ -146,6 +173,7 @@ TaskManager.defineTask(GEOFENCE_TASK, async ({ data, error }) => {
     Date.now(),
     true,
     'geofence',
+    null,
     'stationary',
   );
 });
@@ -159,7 +187,7 @@ export async function foregroundSampleOnce(): Promise<void> {
     const { status } = await Location.getForegroundPermissionsAsync();
     if (status !== 'granted') return;
     const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-    await recordPing(loc.coords.latitude, loc.coords.longitude, loc.timestamp, true, 'foreground');
+    await recordPing(loc.coords.latitude, loc.coords.longitude, loc.timestamp, true, 'foreground', validSpeed(loc.coords.speed));
   } catch (e) {
     console.warn('[ALINE GPS] foregroundSampleOnce failed:', e);
   }

@@ -15,6 +15,7 @@ import { Swipeable } from 'react-native-gesture-handler';
 import { AddFriendModal } from '../../src/components/AddFriendModal';
 import { BehavioralProfile } from '../../src/components/BehavioralProfile';
 import { Button } from '../../src/components/Button';
+import { DeviceCalendarConnect } from '../../src/components/DeviceCalendarConnect';
 import { GoogleCalendarConnect } from '../../src/components/GoogleCalendarConnect';
 import { Input } from '../../src/components/Input';
 import { PipelineStatus } from '../../src/components/PipelineStatus';
@@ -245,9 +246,13 @@ export default function ProfileScreen() {
           />
         </Section>
 
-        {/* Google Calendar connection */}
-        <Section title="Google Calendar">
-          <GoogleCalendarConnect />
+        {/* Calendar connections — phone calendar first: it's where most
+            people's real schedule lives, and needs no OAuth. */}
+        <Section title="Calendars">
+          <View style={{ gap: space.lg }}>
+            <DeviceCalendarConnect />
+            <GoogleCalendarConnect />
+          </View>
         </Section>
 
         {/* Behavioral profile — what ALINE knows about you */}
