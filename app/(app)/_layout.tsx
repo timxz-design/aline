@@ -6,7 +6,6 @@ import { AppState, Text, View, type AppStateStatus } from 'react-native';
 import { logSessionClose, logSessionOpen, type SessionSource } from '../../src/lib/app-sessions';
 import { useAuth } from '../../src/lib/auth-context';
 import { maybeRecompute } from '../../src/lib/auto-recompute';
-import { syncHealthWorkouts } from '../../src/lib/health';
 import { foregroundSampleOnce, startBackgroundGps, stopBackgroundGps, syncGeofences } from '../../src/lib/backgroundGps';
 import {
   registerForPushNotifications,
@@ -70,9 +69,6 @@ export default function AppLayout() {
     // to freeze the whole app at launch).
     const recomputeTimer = setTimeout(() => {
       maybeRecompute();
-      // Pull measured workouts in the same deferred slot. No-ops unless the
-      // user connected Apple Health; never throws.
-      syncHealthWorkouts();
     }, 8000);
     // Cold-launch location sample. The AppState 'active' handler below only
     // fires on foreground *resume*, so without this a cold open never captured
@@ -91,7 +87,7 @@ export default function AppLayout() {
         logSessionOpen(src).then((id) => {
           sessionIdRef.current = id;
         });
-        setTimeout(() => { maybeRecompute(); syncHealthWorkouts(); }, 8000);
+        setTimeout(() => { maybeRecompute(); }, 8000);
         foregroundSampleOnce(); // capture current location on app open
         syncGeofences(); // refresh monitored places (clustering may have changed them)
 
