@@ -198,6 +198,7 @@ export type Database = {
           calendar_permission: string | null
           device_id: string
           geofencing_running: boolean | null
+          health_connected: boolean | null
           last_steps_synced_hour: string | null
           location_bg: string | null
           location_fg: string | null
@@ -216,6 +217,7 @@ export type Database = {
           calendar_permission?: string | null
           device_id?: string
           geofencing_running?: boolean | null
+          health_connected?: boolean | null
           last_steps_synced_hour?: string | null
           location_bg?: string | null
           location_fg?: string | null
@@ -234,6 +236,7 @@ export type Database = {
           calendar_permission?: string | null
           device_id?: string
           geofencing_running?: boolean | null
+          health_connected?: boolean | null
           last_steps_synced_hour?: string | null
           location_bg?: string | null
           location_fg?: string | null

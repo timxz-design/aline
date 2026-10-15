@@ -81,6 +81,14 @@ export default function AgentScreen() {
   // When the user spoke their message, speak the reply back (voice in → voice
   // out). A ref so the realtime handler (stable closure) reads the live value.
   const voiceReplyRef = useRef(false);
+  // Synchronous send lock: `thinking` is state, so it's still false for the
+  // awaits between tapping send and the agent call — a second tap or a repeated
+  // voice "final" result slipped through and sent the message twice.
+  const sendingRef = useRef(false);
+  const lastSentRef = useRef<{ text: string; at: number } | null>(null);
+  // Only follow new content to the bottom when the user is already there, so
+  // reading older messages (or a card growing) never yanks the list around.
+  const nearBottomRef = useRef(true);
 
   // Initial history load. NEWEST 200 reversed for display — ascending+limit
   // returns the OLDEST rows, which silently freezes the chat once history
@@ -198,9 +206,23 @@ export default function AgentScreen() {
   };
 
   const sendText = async (raw: string, fromVoice: boolean, imageUri?: string) => {
-    if (!user || thinking) return;
+    if (!user || thinking || sendingRef.current) return;
     const content = raw.trim();
     if (!content && !imageUri) return;
+    // Same text again within 30s is a duplicate (double tap / repeated voice
+    // result), not a new message.
+    const last = lastSentRef.current;
+    if (!imageUri && last && last.text === content && Date.now() - last.at < 30_000) return;
+    sendingRef.current = true;
+    try {
+      await sendTextUnlocked(raw, content, fromVoice, imageUri);
+    } finally {
+      sendingRef.current = false;
+    }
+  };
+
+  const sendTextUnlocked = async (raw: string, content: string, fromVoice: boolean, imageUri?: string) => {
+    if (!user) return;
     voiceReplyRef.current = fromVoice;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
     setDraft('');
@@ -235,6 +257,8 @@ export default function AgentScreen() {
       setError('Could not send message. Try again.');
       return;
     }
+    lastSentRef.current = { text: content, at: Date.now() };
+    nearBottomRef.current = true; // your own message always brings you down
     setMessages((prev) =>
       prev.some((m) => m.id === inserted.id) ? prev : [...prev, inserted]
     );
@@ -266,7 +290,7 @@ export default function AgentScreen() {
     if (t) setDraft(t);
     if (e.isFinal && t.trim()) {
       setListening(false);
-      sendText(t, true);
+      sendText(t, true); // sendText drops a repeated final result for the same words
     }
   });
   useSpeechRecognitionEvent('end', () => setListening(false));
@@ -309,7 +333,7 @@ export default function AgentScreen() {
   // have a pending notification focus to honor (handled by the effect below).
   useEffect(() => {
     const focusPending = !!focus && !focusHandledRef.current;
-    if (messages.length > 0 && !focusPending) {
+    if (messages.length > 0 && !focusPending && nearBottomRef.current) {
       // Double rAF ensures the list has finished layout before scrolling
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
@@ -328,6 +352,7 @@ export default function AgentScreen() {
     if (idx < 0) return; // not loaded yet — retry when messages update
     focusHandledRef.current = true;
     setHighlightId(focus);
+    nearBottomRef.current = false; // we're deliberately looking at this message
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         try {
@@ -337,9 +362,16 @@ export default function AgentScreen() {
         }
       });
     });
+  }, [focus, messages]);
+
+  // Clear the highlight on its own timer. It used to live in the effect above,
+  // whose cleanup ran on every new message — so replying within 2s left the
+  // highlight (and the paused auto-scroll) stuck, and the scrolls fought.
+  useEffect(() => {
+    if (!highlightId) return;
     const t = setTimeout(() => setHighlightId(null), 2200);
     return () => clearTimeout(t);
-  }, [focus, messages]);
+  }, [highlightId]);
 
   return (
     <Screen noPadding>
@@ -402,11 +434,17 @@ export default function AgentScreen() {
               />
             )}
             ItemSeparatorComponent={() => <View style={{ height: space.sm }} />}
+            onScroll={(e) => {
+              const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
+              nearBottomRef.current =
+                contentSize.height - contentOffset.y - layoutMeasurement.height < 120;
+            }}
+            scrollEventThrottle={64}
             onContentSizeChange={() => {
-              if (!highlightId) listRef.current?.scrollToEnd({ animated: false });
+              if (!highlightId && nearBottomRef.current) listRef.current?.scrollToEnd({ animated: false });
             }}
             onLayout={() => {
-              if (!highlightId) listRef.current?.scrollToEnd({ animated: false });
+              if (!highlightId && nearBottomRef.current) listRef.current?.scrollToEnd({ animated: false });
             }}
             onScrollToIndexFailed={() => {
               listRef.current?.scrollToEnd({ animated: true });

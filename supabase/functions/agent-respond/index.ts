@@ -904,10 +904,25 @@ function buildSystemPromptBlocks(input: {
               w.duration_min ? `${Math.round(w.duration_min)}min` : null,
               w.avg_heart_rate ? `avg ${Math.round(w.avg_heart_rate)}bpm` : null,
               w.energy_kcal ? `${Math.round(w.energy_kcal)}kcal` : null,
-              w.match_kind === 'unplanned' ? 'unplanned' : null,
-              w.match_kind === 'ambiguous' ? 'NOT yet counted — ask which goal it belongs to' : null,
+              // State whether it counted, every time — with no label the model
+              // assumed short test workouts had counted toward a goal.
+              w.match_kind === 'planned' ? 'COUNTED toward a planned goal session'
+                : w.match_kind === 'unplanned' ? 'COUNTED (no session was planned then)'
+                : w.match_kind === 'ambiguous' ? 'NOT yet counted — ask which goal it belongs to'
+                : w.match_kind === 'none' ? 'NOT counted toward any goal (too short, under 5 min, or no matching goal)'
+                : 'not processed yet',
             ].filter(Boolean).join(' · ');
-            return `  - ${w.started_at.slice(0, 16).replace('T', ' ')} — ${bits}`;
+            // Local time — started_at is UTC; slicing it showed 14:34 for a 16:34 workout.
+            const when = new Date(w.started_at).toLocaleString('en-GB', {
+              timeZone: timezone,
+              weekday: 'short',
+              day: 'numeric',
+              month: 'short',
+              hour: '2-digit',
+              minute: '2-digit',
+              hour12: false,
+            });
+            return `  - ${when} — ${bits}`;
           })
           .join('\n');
 

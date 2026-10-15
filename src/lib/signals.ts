@@ -28,6 +28,7 @@ import {
   PERIODIC_LOCATION_TASK,
 } from './backgroundGps';
 import { getDeviceId } from './device-id';
+import { hasHealthAuthorization } from './health';
 import { supabase } from './supabase';
 
 const STEPS_CURSOR_KEY = 'aline_steps_synced_hour_ms';
@@ -48,7 +49,7 @@ export async function reportCollectionHealth(): Promise<void> {
     const uid = await userId();
     if (!uid) return;
 
-    const [fg, bg, bgTask, locRunning, geoRunning, periodic, cal, motion, lastKnown, cursor, deviceId, wifiProbe] =
+    const [fg, bg, bgTask, locRunning, geoRunning, periodic, cal, motion, lastKnown, cursor, deviceId, wifiProbe, healthOn] =
       await Promise.all([
         Location.getForegroundPermissionsAsync().catch(() => null),
         Location.getBackgroundPermissionsAsync().catch(() => null),
@@ -62,6 +63,7 @@ export async function reportCollectionHealth(): Promise<void> {
         AsyncStorage.getItem(STEPS_CURSOR_KEY).catch(() => null),
         getDeviceId(),
         probeWifi(),
+        hasHealthAuthorization(),
       ]);
 
     // iOS doesn't expose the "Precise Location" toggle directly; a reduced-
@@ -73,6 +75,7 @@ export async function reportCollectionHealth(): Promise<void> {
       user_id: uid,
       device_id: deviceId,
       wifi_probe: wifiProbe,
+      health_connected: healthOn,
       app_build: Application.nativeBuildVersion ?? null,
       os_version: `${Platform.OS} ${Platform.Version}`,
       location_fg: fg?.status ?? null,
