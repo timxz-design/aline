@@ -18,6 +18,7 @@ import { Collapsible } from '../../src/components/Collapsible';
 import { Button } from '../../src/components/Button';
 import { DeviceCalendarConnect } from '../../src/components/DeviceCalendarConnect';
 import { GoogleCalendarConnect } from '../../src/components/GoogleCalendarConnect';
+import { HealthConnect } from '../../src/components/HealthConnect';
 import { Input } from '../../src/components/Input';
 import { PipelineStatus } from '../../src/components/PipelineStatus';
 import { Screen } from '../../src/components/Screen';
@@ -257,6 +258,10 @@ export default function ProfileScreen() {
             <DeviceCalendarConnect />
             <GoogleCalendarConnect />
           </View>
+        </Collapsible>
+
+        <Collapsible title="Apple Health" summary="Workouts and sleep">
+          <HealthConnect />
         </Collapsible>
 
         <Collapsible

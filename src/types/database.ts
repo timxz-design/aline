@@ -110,6 +110,7 @@ export type Database = {
           battery_state: string | null
           captured_at: string
           created_at: string
+          device_id: string | null
           geohash_8: string
           id: string
           motion_state: string | null
@@ -125,6 +126,7 @@ export type Database = {
           battery_state?: string | null
           captured_at: string
           created_at?: string
+          device_id?: string | null
           geohash_8: string
           id?: string
           motion_state?: string | null
@@ -140,6 +142,7 @@ export type Database = {
           battery_state?: string | null
           captured_at?: string
           created_at?: string
+          device_id?: string | null
           geohash_8?: string
           id?: string
           motion_state?: string | null
@@ -193,6 +196,7 @@ export type Database = {
           app_build: string | null
           background_refresh: string | null
           calendar_permission: string | null
+          device_id: string
           geofencing_running: boolean | null
           last_steps_synced_hour: string | null
           location_bg: string | null
@@ -204,11 +208,13 @@ export type Database = {
           periodic_task_registered: boolean | null
           reported_at: string
           user_id: string
+          wifi_probe: string | null
         }
         Insert: {
           app_build?: string | null
           background_refresh?: string | null
           calendar_permission?: string | null
+          device_id?: string
           geofencing_running?: boolean | null
           last_steps_synced_hour?: string | null
           location_bg?: string | null
@@ -220,11 +226,13 @@ export type Database = {
           periodic_task_registered?: boolean | null
           reported_at?: string
           user_id: string
+          wifi_probe?: string | null
         }
         Update: {
           app_build?: string | null
           background_refresh?: string | null
           calendar_permission?: string | null
+          device_id?: string
           geofencing_running?: boolean | null
           last_steps_synced_hour?: string | null
           location_bg?: string | null
@@ -236,6 +244,7 @@ export type Database = {
           periodic_task_registered?: boolean | null
           reported_at?: string
           user_id?: string
+          wifi_probe?: string | null
         }
         Relationships: []
       }

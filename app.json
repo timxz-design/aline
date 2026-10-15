@@ -21,9 +21,11 @@
       "bundleIdentifier": "app.aline.mvp",
       "usesAppleSignIn": true,
       "entitlements": {
-        "com.apple.developer.networking.wifi-info": true
+        "com.apple.developer.networking.wifi-info": true,
+        "com.apple.developer.healthkit": true,
+        "com.apple.developer.healthkit.access": []
       },
-      "buildNumber": "35",
+      "buildNumber": "36",
       "infoPlist": {
         "NSCalendarsUsageDescription": "ALINE reads your calendar to coordinate hangouts with your friend groups.",
         "NSContactsUsageDescription": "ALINE uses contacts to help you invite friends to your groups.",
@@ -32,6 +34,8 @@
         "NSPhotoLibraryUsageDescription": "ALINE accesses your photo library only if you choose to attach or set a photo.",
         "NSMicrophoneUsageDescription": "ALINE uses your microphone so you can talk to your agent instead of typing.",
         "NSSpeechRecognitionUsageDescription": "ALINE transcribes your speech so you can talk to your agent.",
+        "NSHealthShareUsageDescription": "ALINE reads your workouts and sleep so sessions you actually did count toward your goals, and your agent knows when you're asleep — without you logging anything.",
+        "NSHealthUpdateUsageDescription": "ALINE does not write to Apple Health.",
         "ITSAppUsesNonExemptEncryption": false
       }
     },

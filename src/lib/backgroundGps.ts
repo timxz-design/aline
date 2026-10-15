@@ -25,6 +25,7 @@ import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
 import { Platform } from 'react-native';
 import { encodeGeohash } from './clustering';
+import { getDeviceId } from './device-id';
 import { supabase } from './supabase';
 
 export const BACKGROUND_LOCATION_TASK = 'aline-background-location';
@@ -96,6 +97,8 @@ const WIFI_SALT = 'aline-wifi-v1:';
 // iOS returns this placeholder BSSID when it won't reveal the real one.
 const BLANK_BSSIDS = new Set(['02:00:00:00:00:00', '00:00:00:00:00:00']);
 
+export { BLANK_BSSIDS };
+
 async function hashWifi(value: string | null | undefined): Promise<string | null> {
   const v = value?.trim().toLowerCase();
   if (!v || BLANK_BSSIDS.has(v)) return null;
@@ -113,7 +116,9 @@ async function readNetwork(): Promise<{
   wifi_ssid_hash: string | null;
 }> {
   try {
-    const state = await NetInfo.fetch();
+    // refresh(), not fetch(): fetch() returns NetInfo's cached state from the
+    // last connectivity event, which can predate this ping by hours.
+    const state = await NetInfo.refresh();
     const network_type =
       state.type === NetInfoStateType.wifi ? 'wifi'
         : state.type === NetInfoStateType.cellular ? 'cellular'
@@ -174,7 +179,7 @@ async function recordPing(
     const { data: { session } } = await supabase.auth.getSession();
     if (!session) return;
 
-    const [battery, network] = await Promise.all([readBattery(), readNetwork()]);
+    const [battery, network, device_id] = await Promise.all([readBattery(), readNetwork(), getDeviceId()]);
     const { error: insertErr } = await supabase.from('behavioral_pings').insert([{
       user_id: session.user.id,
       captured_at: new Date(capturedAtMs).toISOString(),
@@ -184,6 +189,7 @@ async function recordPing(
       battery_level: battery.level,
       battery_state: battery.state,
       ...network,
+      device_id,
       source,
     }]);
     if (insertErr) {

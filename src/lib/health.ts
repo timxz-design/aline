@@ -40,24 +40,14 @@ const FIRST_IMPORT_DAYS = 30;
 /** Re-scan window on every later sync — catches workouts edited after the fact. */
 const OVERLAP_HOURS = 48;
 
-/** Read-only scopes. Keep this list in sync with what we actually query:
- *  querying an un-requested type is what crashes the native module. */
-const READ_TYPES = [
-  'HKWorkoutTypeIdentifier',
-  'HKQuantityTypeIdentifierHeartRate',
-  'HKQuantityTypeIdentifierActiveEnergyBurned',
-  'HKQuantityTypeIdentifierDistanceWalkingRunning',
-  'HKCategoryTypeIdentifierSleepAnalysis',
-] as const;
-
-// HKCategoryValueSleepAnalysis → health_sleep.stage
-const SLEEP_STAGE: Record<number, string> = {
-  0: 'in_bed',
-  1: 'asleep', // asleepUnspecified (pre-iOS 16 / third-party apps)
-  2: 'awake',
-  3: 'core',
-  4: 'deep',
-  5: 'rem',
+// HKCategoryValueSleepAnalysis, as react-native-health names it → health_sleep.stage
+const SLEEP_STAGE: Record<string, string> = {
+  INBED: 'in_bed',
+  ASLEEP: 'asleep', // asleepUnspecified (pre-iOS 16 / third-party apps)
+  AWAKE: 'awake',
+  CORE: 'core',
+  DEEP: 'deep',
+  REM: 'rem',
 };
 
 // HKWorkoutActivityType enum → the families the reconciler matches goals on.
@@ -76,22 +66,89 @@ const ACTIVITY_FAMILY: Record<number, string> = {
   63: 'hiit',       // highIntensityIntervalTraining
 };
 
-// The native HealthKit binding is not in this build: @kingstinct v16 runs on
-// NitroModules, which fails to compile against RN 0.81 on the old architecture
-// (glog module error, build 35). Until a binding that builds is wired back in,
-// getHK() reports HealthKit as unavailable — every entry point below then
-// no-ops, and the UI hides the Health row. The ledger code stays as-is.
+const METERS_PER_MILE = 1609.344; // react-native-health reports workout distance in miles
+
+type RawWorkout = {
+  id: string;
+  activityId: number;
+  calories?: number;
+  distance?: number;
+  device?: string;
+  start: string;
+  end: string;
+  duration?: number; // seconds
+};
+type RawSleep = { id: string; value: string; startDate: string; endDate: string; sourceName?: string };
+
+/**
+ * Promise wrapper over react-native-health — a classic Objective-C bridge
+ * module, which (unlike the Nitro-based @kingstinct binding that broke build 35)
+ * compiles on the old architecture. Only the calls ALINE uses.
+ */
 type HKModule = {
-  isHealthDataAvailable(): boolean;
-  requestAuthorization(o: { toRead: readonly string[] }): Promise<unknown>;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  queryWorkoutSamples(o: unknown): Promise<any[]>;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  queryCategorySamples(id: string, o: unknown): Promise<readonly any[]>;
+  isAvailable(): Promise<boolean>;
+  authorize(): Promise<void>;
+  workoutsSince(since: Date): Promise<RawWorkout[]>;
+  sleepSince(since: Date): Promise<RawSleep[]>;
 };
 
+let hkModule: HKModule | null | undefined;
+
+/** Load the native module lazily. iOS-only, and a failure here must never
+ *  take the app down — it just means health sync is unavailable. */
 async function getHK(): Promise<HKModule | null> {
-  return null;
+  if (Platform.OS !== 'ios') return null;
+  if (hkModule !== undefined) return hkModule;
+  try {
+    // react-native-health assigns module.exports directly (no `default`); accept
+    // either shape so a bundler interop change can't silently disable Health.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const mod = require('react-native-health');
+    const AppleHealthKit = mod?.default ?? mod;
+    if (!AppleHealthKit?.initHealthKit) {
+      hkModule = null;
+      return null;
+    }
+    const P = AppleHealthKit.Constants.Permissions;
+    // Read-only scopes. Keep in sync with what we query: querying an
+    // un-requested type is what crashes the native side.
+    const permissions = { permissions: { read: [P.Workout, P.SleepAnalysis], write: [] } };
+    const call = <T,>(fn: (cb: (err: unknown, res: T) => void) => void) =>
+      new Promise<T>((resolve, reject) =>
+        fn((err, res) => (err ? reject(err instanceof Error ? err : new Error(String(err))) : resolve(res))),
+      );
+    hkModule = {
+      isAvailable: () => call<boolean>((cb) => AppleHealthKit.isAvailable(cb)),
+      authorize: () => call<void>((cb) => AppleHealthKit.initHealthKit(permissions, cb)),
+      workoutsSince: async (since) => {
+        const res = await call<{ data?: RawWorkout[] }>((cb) =>
+          AppleHealthKit.getAnchoredWorkouts({ startDate: since.toISOString() }, cb),
+        );
+        return res?.data ?? [];
+      },
+      sleepSince: (since) =>
+        call<RawSleep[]>((cb) =>
+          AppleHealthKit.getSleepSamples({ startDate: since.toISOString(), ascending: true }, cb),
+        ).then((r) => r ?? []),
+    };
+  } catch (e) {
+    console.warn('[health] native module unavailable:', e);
+    hkModule = null;
+  }
+  return hkModule;
+}
+
+/**
+ * Re-establish the HealthKit session for this launch. react-native-health needs
+ * initHealthKit() once per app run before any query; after the first grant iOS
+ * resolves it silently (no sheet).
+ */
+async function readyHK(): Promise<HKModule | null> {
+  const hk = await getHK();
+  if (!hk || !(await hk.isAvailable().catch(() => false))) return null;
+  if (!(await hasHealthAuthorization())) return null;
+  await hk.authorize();
+  return hk;
 }
 
 /** Is HealthKit usable on this device at all? */
@@ -99,7 +156,7 @@ export async function isHealthAvailable(): Promise<boolean> {
   try {
     const hk = await getHK();
     if (!hk) return false;
-    return hk.isHealthDataAvailable();
+    return await hk.isAvailable();
   } catch {
     return false;
   }
@@ -122,9 +179,9 @@ export async function hasHealthAuthorization(): Promise<boolean> {
 export async function requestHealthAuthorization(): Promise<boolean> {
   try {
     const hk = await getHK();
-    if (!hk || !hk.isHealthDataAvailable()) return false;
+    if (!hk || !(await hk.isAvailable())) return false;
 
-    await hk.requestAuthorization({ toRead: READ_TYPES });
+    await hk.authorize();
     await AsyncStorage.setItem(AUTH_KEY, '1');
 
     // Tell the server we're connected — push_workout_start() only nudges users
@@ -161,11 +218,9 @@ const EMPTY: HealthSyncResult = {
  */
 export async function syncHealthWorkouts(): Promise<HealthSyncResult> {
   try {
-    const hk = await getHK();
-    if (!hk || !hk.isHealthDataAvailable()) return EMPTY;
-
     // Hard gate: never query without authorization (native crash otherwise).
-    if (!(await hasHealthAuthorization())) return EMPTY;
+    const hk = await readyHK();
+    if (!hk) return EMPTY;
 
     const { data: userData } = await supabase.auth.getUser();
     const userId = userData?.user?.id;
@@ -183,52 +238,32 @@ export async function syncHealthWorkouts(): Promise<HealthSyncResult> {
 
     breadcrumb('health.sync start', { since: since.toISOString() });
 
-    const proxies = await hk.queryWorkoutSamples({
-      filter: { date: { startDate: since } },
-      limit: 0,
-      ascending: true,
-    });
+    const workouts = await hk.workoutsSince(since);
 
     const rows: HealthWorkoutInsert[] = [];
-    for (const proxy of proxies) {
+    for (const w of workouts) {
       try {
-        // Heart rate is a per-workout statistic. Best-effort: AirPods Pro 3 and
-        // Watch supply it, a bare phone workout won't.
-        let avgHr: number | null = null;
-        let maxHr: number | null = null;
-        try {
-          const hr = await proxy.getStatistic('HKQuantityTypeIdentifierHeartRate');
-          avgHr = hr?.averageQuantity?.quantity ?? null;
-          maxHr = hr?.maximumQuantity?.quantity ?? null;
-        } catch {
-          /* no HR for this workout — expected without a wearable */
-        }
-
-        const w = proxy.toJSON();
-        const started = new Date(w.startDate);
-        const ended = new Date(w.endDate);
-        const durationSec = w.duration?.quantity ?? (ended.getTime() - started.getTime()) / 1000;
-
+        const started = new Date(w.start);
+        const ended = new Date(w.end);
+        const durationSec = w.duration ?? (ended.getTime() - started.getTime()) / 1000;
         rows.push({
           user_id: userId,
           source: 'healthkit',
-          external_id: String(w.uuid),
-          activity_type: ACTIVITY_FAMILY[Number(w.workoutActivityType)] ?? 'other',
-          raw_activity_type: String(w.workoutActivityType),
+          external_id: String(w.id),
+          activity_type: ACTIVITY_FAMILY[Number(w.activityId)] ?? 'other',
+          raw_activity_type: String(w.activityId),
           started_at: started.toISOString(),
           ended_at: ended.toISOString(),
           duration_min: Math.round((durationSec / 60) * 10) / 10,
-          energy_kcal: w.totalEnergyBurned?.quantity ?? null,
-          distance_m: w.totalDistance?.quantity ?? null,
-          avg_heart_rate: avgHr != null ? Math.round(avgHr) : null,
-          max_heart_rate: maxHr != null ? Math.round(maxHr) : null,
-          device: (w as { device?: { name?: string } }).device?.name ?? null,
+          energy_kcal: w.calories || null,
+          distance_m: w.distance ? Math.round(w.distance * METERS_PER_MILE) : null,
+          // Per-workout heart rate isn't exposed by react-native-health.
+          avg_heart_rate: null,
+          max_heart_rate: null,
+          device: w.device || null,
         });
       } catch (e) {
         console.warn('[health] skipping unreadable workout:', e);
-      } finally {
-        // Release the native object; we only keep the plain row.
-        try { proxy.dispose(); } catch { /* already gone */ }
       }
     }
 
@@ -278,9 +313,8 @@ export async function syncHealthWorkouts(): Promise<HealthSyncResult> {
  */
 export async function syncHealthSleep(): Promise<{ imported: number; error?: string }> {
   try {
-    const hk = await getHK();
-    if (!hk || !hk.isHealthDataAvailable()) return { imported: 0 };
-    if (!(await hasHealthAuthorization())) return { imported: 0 };
+    const hk = await readyHK();
+    if (!hk) return { imported: 0 };
 
     const { data: userData } = await supabase.auth.getUser();
     const userId = userData?.user?.id;
@@ -291,23 +325,19 @@ export async function syncHealthSleep(): Promise<{ imported: number; error?: str
       ? new Date(Number(lastRaw) - OVERLAP_HOURS * 3600 * 1000)
       : new Date(Date.now() - FIRST_IMPORT_DAYS * 24 * 3600 * 1000);
 
-    const samples = await hk.queryCategorySamples('HKCategoryTypeIdentifierSleepAnalysis', {
-      filter: { date: { startDate: since } },
-      limit: 0,
-      ascending: true,
-    });
+    const samples = await hk.sleepSince(since);
 
     const rows = samples
       .map((smp) => {
-        const stage = SLEEP_STAGE[Number(smp.value)];
+        const stage = SLEEP_STAGE[String(smp.value)];
         if (!stage) return null;
         return {
           user_id: userId,
-          external_id: String(smp.uuid),
+          external_id: String(smp.id),
           stage,
           started_at: new Date(smp.startDate).toISOString(),
           ended_at: new Date(smp.endDate).toISOString(),
-          source_name: smp.sourceRevision?.source?.name ?? null,
+          source_name: smp.sourceName ?? null,
         };
       })
       .filter((r): r is NonNullable<typeof r> => r !== null);

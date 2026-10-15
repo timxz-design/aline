@@ -13,6 +13,7 @@
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import NetInfo from '@react-native-community/netinfo';
 import * as Application from 'expo-application';
 import * as BackgroundTask from 'expo-background-task';
 import * as Calendar from 'expo-calendar';
@@ -22,9 +23,11 @@ import * as TaskManager from 'expo-task-manager';
 import { Platform } from 'react-native';
 import {
   BACKGROUND_LOCATION_TASK,
+  BLANK_BSSIDS,
   GEOFENCE_TASK,
   PERIODIC_LOCATION_TASK,
 } from './backgroundGps';
+import { getDeviceId } from './device-id';
 import { supabase } from './supabase';
 
 const STEPS_CURSOR_KEY = 'aline_steps_synced_hour_ms';
@@ -45,7 +48,7 @@ export async function reportCollectionHealth(): Promise<void> {
     const uid = await userId();
     if (!uid) return;
 
-    const [fg, bg, bgTask, locRunning, geoRunning, periodic, cal, motion, lastKnown, cursor] =
+    const [fg, bg, bgTask, locRunning, geoRunning, periodic, cal, motion, lastKnown, cursor, deviceId, wifiProbe] =
       await Promise.all([
         Location.getForegroundPermissionsAsync().catch(() => null),
         Location.getBackgroundPermissionsAsync().catch(() => null),
@@ -57,6 +60,8 @@ export async function reportCollectionHealth(): Promise<void> {
         Pedometer.getPermissionsAsync().catch(() => null),
         Location.getLastKnownPositionAsync().catch(() => null),
         AsyncStorage.getItem(STEPS_CURSOR_KEY).catch(() => null),
+        getDeviceId(),
+        probeWifi(),
       ]);
 
     // iOS doesn't expose the "Precise Location" toggle directly; a reduced-
@@ -66,6 +71,8 @@ export async function reportCollectionHealth(): Promise<void> {
 
     await supabase.from('collection_health').upsert({
       user_id: uid,
+      device_id: deviceId,
+      wifi_probe: wifiProbe,
       app_build: Application.nativeBuildVersion ?? null,
       os_version: `${Platform.OS} ${Platform.Version}`,
       location_fg: fg?.status ?? null,
@@ -84,6 +91,27 @@ export async function reportCollectionHealth(): Promise<void> {
     });
   } catch (e) {
     console.warn('[ALINE signals] reportCollectionHealth failed:', e);
+  }
+}
+
+/**
+ * What iOS hands back for the current Wi-Fi network — presence only, never the
+ * values. Build 35 got network_type 'wifi' but no SSID/BSSID despite the
+ * entitlement, so this tells "iOS withheld it" apart from "we dropped it".
+ */
+async function probeWifi(): Promise<string | null> {
+  try {
+    const s = await NetInfo.refresh();
+    if (s.type !== 'wifi') return s.type;
+    const d = (s.details ?? {}) as { ssid?: string | null; bssid?: string | null };
+    const ssid = d.ssid == null ? 'null' : d.ssid === '' ? 'empty' : 'present';
+    const bssid =
+      d.bssid == null ? 'null'
+        : BLANK_BSSIDS.has(d.bssid.toLowerCase()) ? 'placeholder'
+          : 'present';
+    return `wifi ssid=${ssid} bssid=${bssid}`;
+  } catch (e) {
+    return `error ${(e as Error).message}`.slice(0, 200);
   }
 }
 
