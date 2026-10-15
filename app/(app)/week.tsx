@@ -1,4 +1,4 @@
-import { useLocalSearchParams } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
@@ -86,40 +86,107 @@ export default function WeekScreen() {
     loadEvents();
   }, [loadEvents]);
 
-  // Upcoming confirmed hangouts (direct + group) — sourced from the
-  // coordinated calendar_events the hangout-sync triggers create. Spans the
-  // near future, independent of the visible week, so a hangout two weeks out
-  // is still visible here. This is the dedicated "where am I meeting people"
-  // surface that the day grid alone doesn't give.
-  const [upcoming, setUpcoming] = useState<CalendarEvent[]>([]);
-  const loadUpcoming = useCallback(async () => {
+  // Every plan I'm in and haven't declined — proposing or confirmed — so what
+  // the agent just set up is visible immediately, not only once confirmed.
+  // One query feeds three surfaces: "Waiting for your answer" (my answer is
+  // pending), "Upcoming plans" (I'm going / maybe), and dashed "waiting on
+  // answers" blocks in the day grid for plans with no calendar block yet.
+  const [plans, setPlans] = useState<PlanSummary[]>([]);
+  const loadPlans = useCallback(async () => {
     if (!user) return;
-    const horizon = addDays(new Date(), 30);
+    const from = new Date(Math.min(weekStart.getTime(), Date.now() - 86_400_000)).toISOString();
+    const to = new Date(Math.max(addDays(weekStart, 7).getTime(), addDays(new Date(), 30).getTime())).toISOString();
     const { data, error } = await supabase
-      .from('calendar_events')
-      .select('*')
+      .from('hangout_responses')
+      .select(
+        'status, hangouts!inner(id, title, proposed_start, proposed_end, venue_name, venue_address, status)',
+      )
       .eq('user_id', user.id)
-      .eq('event_type', 'coordinated')
-      .gte('start_at', new Date().toISOString())
-      .lt('start_at', horizon.toISOString())
-      .order('start_at', { ascending: true })
-      .limit(6);
+      .neq('status', 'declined')
+      .in('hangouts.status', ['proposing', 'confirmed'])
+      .gte('hangouts.proposed_start', from)
+      .lt('hangouts.proposed_start', to);
     if (error) {
-      console.warn('Failed to load upcoming hangouts:', error.message);
+      console.warn('Failed to load plans:', error.message);
       return;
     }
-    setUpcoming(data ?? []);
-  }, [user]);
-
+    setPlans(
+      ((data ?? []) as unknown as {
+        status: string;
+        hangouts: Omit<PlanSummary, 'my_status' | 'hangout_id'> & { id: string };
+      }[])
+        .map((r) => ({ ...r.hangouts, hangout_id: r.hangouts.id, my_status: r.status }))
+        .sort((a, b) => (a.proposed_start ?? '').localeCompare(b.proposed_start ?? '')),
+    );
+  }, [user, weekStart]);
   useEffect(() => {
-    loadUpcoming();
-  }, [loadUpcoming]);
+    loadPlans();
+  }, [loadPlans]);
+  const loadUpcoming = loadPlans;
+  const loadInvites = loadPlans;
+
+  // Tabs stay mounted, so reload whenever My Week comes into view — a plan the
+  // agent just made in chat must be on the calendar when the user looks.
+  useFocusEffect(
+    useCallback(() => {
+      loadEvents();
+      loadPlans();
+    }, [loadEvents, loadPlans]),
+  );
+
+  // Live while open: answers and invites change plans (and the confirm trigger
+  // writes calendar blocks) without this screen doing anything. RLS limits the
+  // stream to plans this user can see.
+  useEffect(() => {
+    if (!user) return;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const reload = () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        loadEvents();
+        loadPlans();
+      }, 400); // coalesce bursts (a confirm touches several rows)
+    };
+    const channel = supabase
+      .channel(`week-plans-${user.id}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'hangout_responses' }, reload)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'hangouts' }, reload)
+      .subscribe();
+    return () => {
+      if (timer) clearTimeout(timer);
+      supabase.removeChannel(channel);
+    };
+  }, [user, loadEvents, loadPlans]);
+
+  const nowMs = now.getTime();
+  const invites = useMemo(
+    () => plans.filter((p) => p.my_status === 'pending' && (!p.proposed_start || new Date(p.proposed_start).getTime() > nowMs)),
+    [plans, nowMs],
+  );
+  const upcoming = useMemo(
+    () =>
+      plans
+        .filter(
+          (p) =>
+            p.my_status !== 'pending' &&
+            !!p.proposed_start &&
+            new Date(p.proposed_start).getTime() >= nowMs &&
+            new Date(p.proposed_start).getTime() < nowMs + 30 * 86_400_000,
+        )
+        .slice(0, 6),
+    [plans, nowMs],
+  );
 
   // Who is in each visible plan — drives the block colour (the other person's
   // colour for a 1:1, the group colour for more) and the initials shown on it.
   const [participants, setParticipants] = useState<Map<string, Participant[]>>(new Map());
   useEffect(() => {
-    const ids = [...new Set([...events, ...upcoming].map((e) => e.hangout_id).filter((x): x is string => !!x))];
+    const ids = [
+      ...new Set([
+        ...events.map((e) => e.hangout_id).filter((x): x is string => !!x),
+        ...plans.map((p) => p.hangout_id),
+      ]),
+    ];
     let cancelled = false;
     getParticipantsFor(ids).then((m) => {
       if (!cancelled) setParticipants(m);
@@ -127,7 +194,8 @@ export default function WeekScreen() {
     return () => {
       cancelled = true;
     };
-  }, [events, upcoming]);
+  }, [events, plans]);
+  const inviteParticipants = participants;
   const [openPlanId, setOpenPlanId] = useState<string | null>(null);
 
   // Deep link from a plan notification: /(app)/week?plan=<hangout id>.
@@ -135,43 +203,6 @@ export default function WeekScreen() {
   useEffect(() => {
     if (typeof planParam === 'string' && planParam) setOpenPlanId(planParam);
   }, [planParam]);
-
-  // Plans waiting for my answer. Not on the calendar yet (only confirmed plans
-  // are), and an invitee outside the plan's group never sees it in Groups — so
-  // this is the one place an invite is always visible.
-  type Invite = { hangout_id: string; title: string | null; proposed_start: string | null; venue_name: string | null };
-  const [invites, setInvites] = useState<Invite[]>([]);
-  const loadInvites = useCallback(async () => {
-    if (!user) return;
-    const { data, error } = await supabase
-      .from('hangout_responses')
-      .select('hangout_id, hangouts!inner(title, proposed_start, venue_name, status)')
-      .eq('user_id', user.id)
-      .eq('status', 'pending')
-      .in('hangouts.status', ['proposing', 'confirmed']);
-    if (error) {
-      console.warn('Failed to load invites:', error.message);
-      return;
-    }
-    const nowMs = Date.now();
-    setInvites(
-      ((data ?? []) as unknown as {
-        hangout_id: string;
-        hangouts: { title: string | null; proposed_start: string | null; venue_name: string | null };
-      }[])
-        .map((r) => ({ hangout_id: r.hangout_id, ...r.hangouts }))
-        .filter((i) => !i.proposed_start || new Date(i.proposed_start).getTime() > nowMs)
-        .sort((a, b) => (a.proposed_start ?? '').localeCompare(b.proposed_start ?? '')),
-    );
-  }, [user]);
-  useEffect(() => {
-    loadInvites();
-  }, [loadInvites]);
-  const inviteIds = useMemo(() => invites.map((i) => i.hangout_id), [invites]);
-  const [inviteParticipants, setInviteParticipants] = useState<Map<string, Participant[]>>(new Map());
-  useEffect(() => {
-    getParticipantsFor(inviteIds).then(setInviteParticipants);
-  }, [inviteIds]);
 
   /**
    * Refresh button: if the user has Google connected, run a sync first
@@ -191,10 +222,14 @@ export default function WeekScreen() {
     }
   }, [loadEvents, loadUpcoming, loadInvites]);
 
-  const eventsForSelectedDay = useMemo(
-    () => events.filter((ev) => sameDay(new Date(ev.start_at), selectedDate)),
-    [events, selectedDate]
-  );
+  const eventsForSelectedDay = useMemo(() => {
+    const real = events.filter((ev) => sameDay(new Date(ev.start_at), selectedDate));
+    const placed = new Set(real.map((e) => e.hangout_id).filter(Boolean));
+    const tentative = plans
+      .filter((p) => p.proposed_start && !placed.has(p.hangout_id) && sameDay(new Date(p.proposed_start), selectedDate))
+      .map((p) => planAsEvent(p));
+    return [...real, ...tentative].sort((a, b) => a.start_at.localeCompare(b.start_at));
+  }, [events, plans, selectedDate]);
 
   /**
    * Week navigation. Moving by ±7 days keeps the same day-of-week selected
@@ -375,14 +410,14 @@ export default function WeekScreen() {
         ) : null}
         {upcoming.length > 0 ? (
           <View style={styles.upcomingSection}>
-            <Text style={styles.upcomingHeader}>Upcoming hangouts</Text>
-            {upcoming.map((h) => (
+            <Text style={styles.upcomingHeader}>Upcoming plans</Text>
+            {upcoming.map((p) => (
               <UpcomingHangout
-                key={h.id}
-                event={h}
-                participants={h.hangout_id ? participants.get(h.hangout_id) : undefined}
+                key={p.hangout_id}
+                plan={p}
+                participants={participants.get(p.hangout_id)}
                 meId={user?.id}
-                onOpen={h.hangout_id ? () => setOpenPlanId(h.hangout_id) : undefined}
+                onOpen={() => setOpenPlanId(p.hangout_id)}
               />
             ))}
           </View>
@@ -420,6 +455,7 @@ export default function WeekScreen() {
                 key={ev.id}
                 event={ev}
                 indent={Math.min(depth, 3)}
+                tentative={ev.id.startsWith(TENTATIVE_PREFIX)}
                 participants={ev.hangout_id ? participants.get(ev.hangout_id) : undefined}
                 meId={user?.id}
                 onOpenPlan={ev.hangout_id ? () => setOpenPlanId(ev.hangout_id) : undefined}
@@ -472,16 +508,18 @@ function CurrentTimeLine({ now }: { now: Date }) {
 }
 
 function UpcomingHangout({
-  event,
+  plan,
   participants,
   meId,
   onOpen,
 }: {
-  event: CalendarEvent;
+  plan: PlanSummary;
   participants?: Participant[];
   meId?: string;
   onOpen?: () => void;
 }) {
+  const event = planAsEvent(plan);
+  const waiting = plan.status !== 'confirmed';
   const others = participants ? otherParticipants(participants, meId) : [];
   const accent = participants ? planColor(participants, meId) : colors.eventCoordinated;
   const when = new Date(event.start_at).toLocaleString(undefined, {
@@ -512,7 +550,10 @@ function UpcomingHangout({
         <Text style={styles.upcomingTitle} numberOfLines={1}>
           {event.title || 'Hangout'}
         </Text>
-        <Text style={styles.upcomingWhen}>{when}</Text>
+        <Text style={styles.upcomingWhen}>
+          {when}
+          {waiting ? ' · waiting on answers' : ''}
+        </Text>
         {event.location ? (
           <Pressable onPress={openDirections} hitSlop={6}>
             <Text style={styles.upcomingVenue} numberOfLines={1}>
@@ -543,6 +584,7 @@ function EventBlock({
   participants,
   meId,
   onOpenPlan,
+  tentative = false,
 }: {
   event: CalendarEvent;
   onChange: () => void;
@@ -551,6 +593,8 @@ function EventBlock({
   participants?: Participant[];
   meId?: string;
   onOpenPlan?: () => void;
+  /** A plan still collecting answers — no calendar block exists yet. */
+  tentative?: boolean;
 }) {
   const start = new Date(event.start_at);
   const end = new Date(event.end_at);
@@ -610,6 +654,7 @@ function EventBlock({
         </Text>
         {wasMoved ? <Text style={styles.movedBadge}>↔ moved</Text> : null}
         {isRoutine ? <Text style={styles.movedBadge}>inferred</Text> : null}
+        {tentative ? <Text style={styles.movedBadge}>waiting</Text> : null}
         {others.length > 0 ? <AvatarStack people={others} size={18} /> : null}
       </View>
       <Text style={styles.eventTime}>
@@ -625,6 +670,7 @@ function EventBlock({
     styles.eventBlock,
     { top, height, borderLeftColor: accent, backgroundColor: tint(accent) },
     isRoutine && styles.eventBlockInferred,
+    tentative && [styles.eventBlockTentative, { borderColor: accent }],
     indent > 0 && {
       left: space.lg + 56 + indent * 16,
       zIndex: indent,
@@ -652,6 +698,36 @@ function EventBlock({
   return <View style={blockStyle}>{body}</View>;
 }
 
+type PlanSummary = {
+  hangout_id: string;
+  title: string | null;
+  proposed_start: string | null;
+  proposed_end: string | null;
+  venue_name: string | null;
+  venue_address: string | null;
+  status: string;
+  my_status: string;
+};
+
+const TENTATIVE_PREFIX = 'plan:';
+
+/** Shape a plan like a calendar block (2h default, as the server does). */
+function planAsEvent(p: PlanSummary): CalendarEvent {
+  const start = p.proposed_start ?? new Date().toISOString();
+  const end = p.proposed_end ?? new Date(new Date(start).getTime() + 2 * 3600_000).toISOString();
+  return {
+    id: TENTATIVE_PREFIX + p.hangout_id,
+    title: p.title,
+    start_at: start,
+    end_at: end,
+    event_type: 'coordinated',
+    hangout_id: p.hangout_id,
+    location: [p.venue_name, p.venue_address].filter(Boolean).join(' - ') || null,
+    original_start_at: null,
+    external_id: null,
+  } as unknown as CalendarEvent;
+}
+
 function tint(hex: string): string {
   // Cheap visual tint — just append low-alpha hex. Works because we use 6-char colors.
   return `${hex}22`;
@@ -662,6 +738,12 @@ function formatHM(d: Date): string {
 }
 
 const styles = StyleSheet.create({
+  eventBlockTentative: {
+    borderWidth: 1.5,
+    borderStyle: 'dashed',
+    borderLeftWidth: 3,
+    backgroundColor: 'transparent',
+  },
   answerLink: { color: colors.accent, fontSize: 13, fontWeight: '700' },
   header: {
     paddingHorizontal: space.lg,

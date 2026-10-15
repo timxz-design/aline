@@ -20,7 +20,8 @@ export function planColor(participants: Participant[], meId: string | undefined)
   return others.length === 1 ? avatarColor(others[0].user_id) : GROUP_PLAN_COLOR;
 }
 
-/** Overlapping initials, up to `max`, then "+N". */
+/** Overlapping initials, up to `max`, then "+N". Going = solid; invited/maybe = faded.
+ *  Confirmed people are shown first so a full stack favours who's actually coming. */
 export function AvatarStack({
   people,
   size = 22,
@@ -31,7 +32,8 @@ export function AvatarStack({
   max?: number;
 }) {
   if (people.length === 0) return null;
-  const shown = people.slice(0, max);
+  const ordered = [...people].sort((a, b) => Number(b.status === 'confirmed') - Number(a.status === 'confirmed'));
+  const shown = ordered.slice(0, max);
   const extra = people.length - shown.length;
   const overlap = Math.round(size * 0.3);
   return (
@@ -42,6 +44,8 @@ export function AvatarStack({
           style={[
             styles.ring,
             { borderRadius: (size + 4) / 2, marginLeft: i === 0 ? 0 : -overlap, zIndex: max - i },
+            // Invited / maybe: shown, but faded until they say yes.
+            p.status !== 'confirmed' && { opacity: 0.45 },
           ]}
         >
           <PersonAvatar id={p.user_id} name={personName(p)} size={size} />

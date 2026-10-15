@@ -136,6 +136,11 @@ type UpcomingHangoutRow = {
   // The agent needs the kind so it can pick the right RPC if it needs to
   // reschedule (cancel_hangout works for both; update_hangout for both).
   kind: 'group' | 'direct';
+  is_host: boolean;
+  my_id: string;
+  invite_policy: 'host_only' | 'participants' | 'mutuals';
+  /** Everyone on the plan's list, incl. the user, with their answer. */
+  participants: { user_id: string; handle: string | null; first_name: string | null; status: string }[];
 };
 
 type BehavioralSummaryRow = {
@@ -283,6 +288,12 @@ const TOOLS = [
           type: 'string',
           description: 'Optional venue address.',
         },
+        invite_policy: {
+          type: 'string',
+          enum: ['host_only', 'participants', 'mutuals'],
+          description:
+            "Optional. Who may add more people later: 'host_only' (default — only the user), 'participants' (anyone going can add their friends), 'mutuals' (anyone going can add friends who also know someone else in the plan). Only set it if the user expressed a preference (\"let people bring friends\", \"keep it small\").",
+        },
         min_attendees: {
           type: 'integer',
           description:
@@ -341,6 +352,43 @@ const TOOLS = [
         },
       },
       required: ['participant_handles', 'duration_minutes', 'earliest', 'latest'],
+    },
+  },
+  {
+    name: 'invite_to_hangout',
+    description:
+      "Add friends to an EXISTING hangout (\"add Sara to Friday's coffee\", \"invite Luka too\"). Look up the hangout in Upcoming hangouts — its line says whether the user may invite and under which rule. " +
+      "Rules (enforced server-side, check them yourself first so you can explain): only the user's FRIENDS can be invited; the user must be allowed by the plan's invite rule (host_only = only the host; participants = anyone going; mutuals = anyone going, AND the invitee must also be friends with someone else in the plan). " +
+      "If the user isn't allowed, don't call this — tell them who can invite (the host) instead. For a plan with a fixed time, check the invitee's availability with find_mutual_slots first when it's cheap to do so. " +
+      "Ad-hoc plan with several friends who aren't a group: propose_hangout 1-on-1 with one of them, then invite_to_hangout the rest.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        hangout_id: { type: 'string', description: 'UUID from the Upcoming hangouts list.' },
+        friend_handles: {
+          type: 'array',
+          items: { type: 'string' },
+          description: "Handles (no leading @) from the Friends list, e.g. ['sara','luka'].",
+        },
+      },
+      required: ['hangout_id', 'friend_handles'],
+    },
+  },
+  {
+    name: 'set_invite_policy',
+    description:
+      "Change who may add people to a hangout. ONLY the host (the user, when the Upcoming hangouts line says 'you host') can do this. Use when the user says things like \"let them bring friends\", \"only mutual friends\", \"keep it just us\".",
+    input_schema: {
+      type: 'object',
+      properties: {
+        hangout_id: { type: 'string', description: 'UUID from the Upcoming hangouts list.' },
+        policy: {
+          type: 'string',
+          enum: ['host_only', 'participants', 'mutuals'],
+          description: "host_only = only the host; participants = anyone going; mutuals = anyone going, invitee must also know someone else in the plan.",
+        },
+      },
+      required: ['hangout_id', 'policy'],
     },
   },
   {
@@ -897,7 +945,22 @@ function buildSystemPromptBlocks(input: {
                   hour12: false,
                 })
               : '(no time)';
-            return `  - "${h.title}" · ${when} · with ${h.who_label} · ${h.status} · id: ${h.id} · kind: ${h.kind}`;
+            const STATUS: Record<string, string> = { confirmed: 'going', maybe: 'maybe', pending: 'invited, no answer yet', declined: "can't" };
+            const people = h.participants
+              .map((p) => `${p.handle ? '@' + p.handle : p.first_name ?? 'someone'} (${STATUS[p.status] ?? p.status})`)
+              .join(', ');
+            const RULE: Record<string, string> = {
+              host_only: 'only the host invites',
+              participants: 'anyone going may invite their friends',
+              mutuals: 'anyone going may invite friends who also know someone else in the plan',
+            };
+            const mine = h.participants.find((p) => p.user_id === h.my_id);
+            const canInvite =
+              (h.status === 'proposing' || h.status === 'confirmed') &&
+              (h.is_host || (h.invite_policy !== 'host_only' && !!mine && mine.status !== 'declined'));
+            return `  - "${h.title}" · ${when} · with ${h.who_label} · ${h.status} · id: ${h.id} · kind: ${h.kind}` +
+              `\n      people: ${people || '(none listed)'}` +
+              `\n      ${h.is_host ? 'you host' : 'someone else hosts'} · invite rule: ${RULE[h.invite_policy] ?? h.invite_policy} · you ${canInvite ? 'CAN' : 'CANNOT'} invite`;
           })
           .join('\n');
 
@@ -1082,6 +1145,18 @@ You learn from every conversation. You represent ${firstName} when their agent t
 - **cancel_hangout** — Cancel an existing hangout. Look up the id from the
   Upcoming hangouts list. For direct: either party can cancel. For group:
   only the proposer.
+
+- **invite_to_hangout** — Add friends to an existing hangout. Respect the
+  plan's invite rule shown in Upcoming hangouts: if it says "you CANNOT
+  invite", don't try — tell ${firstName} the host decides who joins and
+  suggest asking them. Only friends can be
+  invited; under "mutuals" the invitee must also be friends with someone
+  else in the plan. The tool reports who was added and who was skipped and
+  why — relay that honestly. Invitees start as "invited, no answer yet".
+
+- **set_invite_policy** — Host only. "let them bring friends" →
+  participants; "only people we both know" → mutuals; "just us" →
+  host_only.
 
 - **update_hangout** — Reschedule or edit an existing hangout (only the
   proposer can). If you're CHANGING THE TIME, you must call find_mutual_slots
@@ -1347,7 +1422,8 @@ Their friends (USE THE EXACT handle when calling propose_hangout with direct_fri
 Trust tiers: a friend tagged INNER CIRCLE is someone ${firstName} is close to (family/partner/best friend) — coordinate with them more proactively (you may suggest plans with them unprompted) and treat their time as closely linked. A friend tagged "shares full schedule with you" has granted ${firstName} full visibility — for THOSE you can call get_friend_schedule to see their real events (titles/times) and reason about them; for ordinary friends use find_mutual_slots (free/busy only). Never assume inner-circle access for a friend without the tag.
 ${friendLines}
 
-Upcoming hangouts (next 5; USE THE EXACT id for cancel_hangout / update_hangout):
+Upcoming hangouts (next 5; USE THE EXACT id for cancel_hangout / update_hangout / invite_to_hangout / set_invite_policy).
+Each lists everyone in it with their answer, who hosts, the invite rule and whether ${firstName} may invite:
 ${upcomingLines}
 
 This week at a glance (next 7 days — real occupied time, your source of truth for what's scheduled):
@@ -1616,7 +1692,7 @@ Deno.serve(async (req: Request) => {
     supabase
       .from('hangouts')
       .select(
-        'id, title, proposed_start, status, group_id, direct_user_id, ' +
+        'id, title, proposed_start, status, group_id, direct_user_id, invite_policy, proposed_by, ' +
           'groups(name), ' +
           'direct_user:profiles!hangouts_direct_user_id_fkey(handle, first_name), ' +
           'proposer:profiles!hangouts_proposed_by_fkey(id, handle, first_name)'
@@ -1692,6 +1768,16 @@ Deno.serve(async (req: Request) => {
       .neq('status', 'archived')
       .order('updated_at', { ascending: false })
       .limit(10),
+    // Measured workouts (HealthKit), last 14 days — evidence for "did I train?".
+    // This query was missing while healthWorkoutsRes was still destructured,
+    // so every request read `.data` of undefined.
+    supabase
+      .from('health_workouts')
+      .select('activity_type, started_at, duration_min, avg_heart_rate, energy_kcal, match_kind')
+      .eq('user_id', userId)
+      .gte('started_at', new Date(Date.now() - 14 * 86_400_000).toISOString())
+      .order('started_at', { ascending: false })
+      .limit(20),
   ]);
 
   const profile: ProfileRow = (profileRes.data as ProfileRow | null) ?? {
@@ -1754,12 +1840,39 @@ Deno.serve(async (req: Request) => {
     status: string | null;
     group_id: string | null;
     direct_user_id: string | null;
+    invite_policy: 'host_only' | 'participants' | 'mutuals' | null;
+    proposed_by: string;
     groups: { name: string } | null;
     direct_user: { handle: string | null; first_name: string | null } | null;
     proposer: { id: string; handle: string | null; first_name: string | null } | null;
   };
+  const upcomingRows = (upcomingHangoutsRes.data as UpcomingJoinRow[] | null) ?? [];
+  // Everyone on each plan's list (incl. people invited later), with answers.
+  const participantsByHangout = new Map<string, UpcomingHangoutRow['participants']>();
+  if (upcomingRows.length > 0) {
+    const { data: partRows } = await supabase.rpc('hangout_participants_for', {
+      _hangout_ids: upcomingRows.map((h) => h.id),
+    });
+    for (const r of (partRows ?? []) as {
+      hangout_id: string;
+      user_id: string;
+      status: string;
+      first_name: string | null;
+      handle: string | null;
+    }[]) {
+      const list = participantsByHangout.get(r.hangout_id) ?? [];
+      list.push({ user_id: r.user_id, handle: r.handle, first_name: r.first_name, status: r.status });
+      participantsByHangout.set(r.hangout_id, list);
+    }
+  }
+  const planMeta = (h: UpcomingJoinRow) => ({
+    is_host: h.proposed_by === userId,
+    my_id: userId,
+    invite_policy: h.invite_policy ?? ('host_only' as const),
+    participants: participantsByHangout.get(h.id) ?? [],
+  });
   const upcomingHangouts: UpcomingHangoutRow[] =
-    ((upcomingHangoutsRes.data as UpcomingJoinRow[] | null) ?? []).map((h) => {
+    upcomingRows.map((h) => {
       if (h.group_id) {
         return {
           id: h.id,
@@ -1768,6 +1881,7 @@ Deno.serve(async (req: Request) => {
           status: h.status,
           who_label: h.groups?.name ?? 'group',
           kind: 'group' as const,
+          ...planMeta(h),
         };
       }
       // Direct hangout. For the current user, the "who" is the OTHER party.
@@ -1784,6 +1898,7 @@ Deno.serve(async (req: Request) => {
         status: h.status,
         who_label: `@${who}`,
         kind: 'direct' as const,
+        ...planMeta(h),
       };
     });
 
@@ -2308,6 +2423,18 @@ async function executeTool(
       typeof input.min_attendees === 'number' && Number.isFinite(input.min_attendees)
         ? Math.max(1, Math.floor(input.min_attendees))
         : null;
+    const invitePolicy = ['participants', 'mutuals'].includes(String(input.invite_policy ?? ''))
+      ? String(input.invite_policy)
+      : null;
+    // Applied right after creation; failure here never undoes the plan.
+    const applyPolicy = async (hangoutId: unknown): Promise<string> => {
+      if (!invitePolicy || typeof hangoutId !== 'string') return '';
+      const { error: polErr } = await supabase.rpc('set_hangout_invite_policy', {
+        _hangout_id: hangoutId,
+        _policy: invitePolicy,
+      });
+      return polErr ? ` (Couldn't set the invite rule: ${polErr.message})` : ` Invite rule: ${invitePolicy}.`;
+    };
 
     // Exactly one of group_id / direct_friend_handle
     if (!!groupId === !!directHandle) {
@@ -2356,9 +2483,10 @@ async function executeTool(
       if (error) {
         return { ok: false, message: `Failed to create direct hangout: ${error.message}` };
       }
+      const policyNote = await applyPolicy(data);
       return {
         ok: true,
-        message: `Direct hangout created (id: ${data}) with @${friend.handle ?? '?'}. You're auto-confirmed; they see it as pending until they respond.`,
+        message: `Direct hangout created (id: ${data}) with @${friend.handle ?? '?'}. You're auto-confirmed; they see it as pending until they respond. It shows on the user's calendar now as "waiting on answers" and becomes a solid block once confirmed.${policyNote}`,
       };
     }
 
@@ -2386,9 +2514,10 @@ async function executeTool(
     }
 
     const groupName = userGroups.find((g) => g.id === groupId)?.name ?? 'the group';
+    const policyNote = await applyPolicy(data);
     return {
       ok: true,
-      message: `Hangout created (id: ${data}). Group "${groupName}" members notified. You're auto-confirmed; the hangout flips to CONFIRMED once enough members are in.`,
+      message: `Hangout created (id: ${data}). Group "${groupName}" members notified. You're auto-confirmed; the hangout flips to CONFIRMED once enough members are in. It shows on the user's calendar now as "waiting on answers".${policyNote}`,
     };
   }
 
@@ -2486,6 +2615,90 @@ async function executeTool(
           'Slots are ranked by score. `your_usual` means nothing is on the calendar then, but the user RELIABLY does that activity in that slot (learned from verified behaviour). Prefer a clean slot when one scores close. If the best option carries `your_usual`, say so plainly and offer to move that habit rather than silently double-booking it — e.g. "Thursday 18:00 works for everyone, though that is usually your training slot. Want me to shift the session to Friday?". `others_usually_busy` is a count only: another participant typically has something on then. Factor it into your choice but NEVER name them or say what it is — that is private to them.',
       }),
     };
+  }
+
+  if (name === 'invite_to_hangout') {
+    const hangoutId = String(input.hangout_id ?? '').trim();
+    const handles = (Array.isArray(input.friend_handles) ? input.friend_handles : [])
+      .map((h) => String(h).replace(/^@/, '').toLowerCase().trim())
+      .filter(Boolean);
+    if (!hangoutId) return { ok: false, message: 'hangout_id is required' };
+    if (handles.length === 0) return { ok: false, message: 'friend_handles must list at least one handle' };
+    const known = upcomingHangouts.find((h) => h.id === hangoutId);
+    if (!known) {
+      return { ok: false, message: `hangout_id ${hangoutId} not in user's upcoming hangouts. Double-check the id.` };
+    }
+
+    const unknown: string[] = [];
+    const ids = new Map<string, string>(); // user_id → handle
+    for (const h of handles) {
+      const f = userFriends.find((fr) => (fr.handle ?? '').toLowerCase() === h);
+      if (f) ids.set(f.id, h);
+      else unknown.push(h);
+    }
+
+    // Ask the server first so every skip comes with its reason.
+    const { data: cands, error: candErr } = await supabase.rpc('hangout_invite_candidates', {
+      _hangout_id: hangoutId,
+    });
+    if (candErr) return { ok: false, message: `Couldn't check who can be invited: ${candErr.message}` };
+    const byId = new Map<string, { allowed: boolean; reason: string | null }>(
+      ((cands ?? []) as { user_id: string; allowed: boolean; reason: string | null }[]).map((c) => [c.user_id, c]),
+    );
+    const REASON: Record<string, string> = {
+      no_mutual: "isn't friends with anyone else in the plan (rule: mutual friends only)",
+      not_your_friend: "isn't the user's friend",
+      already_in: 'is already in the plan',
+    };
+    const skipped: string[] = unknown.map((h) => `@${h} (not in the user's friends list)`);
+    const toInvite: string[] = [];
+    for (const [id, h] of ids) {
+      const c = byId.get(id);
+      if (!c) skipped.push(`@${h} (already in the plan)`);
+      else if (!c.allowed) skipped.push(`@${h} (${REASON[c.reason ?? ''] ?? c.reason})`);
+      else toInvite.push(id);
+    }
+
+    let invited = 0;
+    if (toInvite.length > 0) {
+      const { data, error } = await supabase.rpc('invite_to_hangout', {
+        _hangout_id: hangoutId,
+        _user_ids: toInvite,
+      });
+      if (error) {
+        // Most likely the plan's invite rule doesn't let this user invite.
+        return {
+          ok: false,
+          message: `Couldn't invite: ${error.message}. The plan's rule is "${known.invite_policy}" and ${known.is_host ? 'the user hosts' : 'someone else hosts'} — explain that to the user rather than retrying.`,
+        };
+      }
+      invited = Number(data ?? 0);
+    }
+    const invitedHandles = toInvite.map((id) => '@' + ids.get(id)).slice(0, invited);
+    return {
+      ok: invited > 0,
+      message:
+        (invited > 0
+          ? `Invited ${invitedHandles.join(', ')} to "${known.title}". They got a notification and show as "invited, no answer yet" on the plan.`
+          : 'Nobody was invited.') +
+        (skipped.length ? ` Skipped: ${skipped.join('; ')}.` : ''),
+    };
+  }
+
+  if (name === 'set_invite_policy') {
+    const hangoutId = String(input.hangout_id ?? '').trim();
+    const policy = String(input.policy ?? '');
+    if (!['host_only', 'participants', 'mutuals'].includes(policy)) {
+      return { ok: false, message: 'policy must be host_only, participants or mutuals' };
+    }
+    const known = upcomingHangouts.find((h) => h.id === hangoutId);
+    if (!known) return { ok: false, message: `hangout_id ${hangoutId} not in user's upcoming hangouts.` };
+    if (!known.is_host) {
+      return { ok: false, message: 'Only the host can change who may invite — the user is not the host of this plan.' };
+    }
+    const { error } = await supabase.rpc('set_hangout_invite_policy', { _hangout_id: hangoutId, _policy: policy });
+    if (error) return { ok: false, message: `set_invite_policy failed: ${error.message}` };
+    return { ok: true, message: `"${known.title}": invite rule is now ${policy}.` };
   }
 
   if (name === 'cancel_hangout') {
