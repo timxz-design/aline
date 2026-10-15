@@ -12,6 +12,7 @@ import { supabase } from '../lib/supabase';
 import { useFriends, type FriendProfile } from '../lib/use-friends';
 import { colors, font, radius, space } from '../theme';
 import { Button } from './Button';
+import { PersonAvatar } from './PersonAvatar';
 
 /**
  * Modal for adding existing friends to a group. Friends-only:
@@ -112,11 +113,7 @@ export function AddMembersModal({
                     <View style={[styles.checkbox, active && styles.checkboxActive]}>
                       {active ? <Text style={styles.checkmark}>✓</Text> : null}
                     </View>
-                    <View style={styles.avatar}>
-                      <Text style={styles.avatarText}>
-                        {(item.first_name?.[0] ?? item.handle?.[0] ?? '?').toUpperCase()}
-                      </Text>
-                    </View>
+                    <PersonAvatar id={item.id} name={item.first_name ?? item.handle} size={32} />
                     <View style={{ flex: 1 }}>
                       <Text style={styles.name}>
                         {item.first_name ?? 'Unnamed'}
@@ -198,15 +195,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.accent,
   },
   checkmark: { color: colors.textInverse, fontSize: 13, fontWeight: '900' },
-  avatar: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: colors.bgRaised,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  avatarText: { color: colors.text, fontSize: 13, fontWeight: '700' },
   name: { color: colors.text, fontSize: 14, fontWeight: '600' },
   handle: { color: colors.textMuted, fontSize: 11 },
 

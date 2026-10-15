@@ -12,6 +12,7 @@ import {
   View,
 } from 'react-native';
 import { Swipeable } from 'react-native-gesture-handler';
+import { PersonAvatar } from '../../src/components/PersonAvatar';
 import { AddMembersModal } from '../../src/components/AddMembersModal';
 import { Button } from '../../src/components/Button';
 import { Input } from '../../src/components/Input';
@@ -37,6 +38,8 @@ type GroupRow = {
   member_count: number;
   member_ids: string[];
   member_names: string[];
+  /** id → label for every member, so hangout cards can name the proposer. */
+  members: { id: string; label: string }[];
   hangouts: HangoutWithResponses[];
   muted_until: string | null;
 };
@@ -92,6 +95,7 @@ export default function GroupsScreen() {
 
     const memberIdsByGroup = new Map<string, string[]>();
     const memberNamesByGroup = new Map<string, string[]>();
+    const membersByGroup = new Map<string, { id: string; label: string }[]>();
     (allMembers as unknown as Array<{
       group_id: string;
       user_id: string;
@@ -107,6 +111,9 @@ export default function GroupsScreen() {
       const names = memberNamesByGroup.get(m.group_id) ?? [];
       names.push(label);
       memberNamesByGroup.set(m.group_id, names);
+      const people = membersByGroup.get(m.group_id) ?? [];
+      people.push({ id: m.user_id, label });
+      membersByGroup.set(m.group_id, people);
     });
 
     // Fetch all responses for the visible hangouts in one shot
@@ -156,6 +163,7 @@ export default function GroupsScreen() {
           member_count: ids.length,
           member_ids: ids,
           member_names: memberNamesByGroup.get(g.id) ?? [],
+          members: membersByGroup.get(g.id) ?? [],
           hangouts: hangoutsByGroup.get(g.id) ?? [],
           muted_until: mutedByGroup.get(g.id) ?? null,
         };
@@ -447,11 +455,12 @@ function GroupCard({
         <Text style={styles.cardSub}>{group.description}</Text>
       ) : null}
 
-      {group.member_names.length > 0 ? (
+      {group.members.length > 0 ? (
         <View style={styles.memberChipWrap}>
-          {group.member_names.map((name, idx) => (
-            <View key={idx} style={styles.memberChip}>
-              <Text style={styles.memberChipText}>{name}</Text>
+          {group.members.map((m) => (
+            <View key={m.id} style={[styles.memberChip, styles.memberChipWithAvatar]}>
+              <PersonAvatar id={m.id} name={m.label} size={20} />
+              <Text style={styles.memberChipText}>{m.label}</Text>
             </View>
           ))}
         </View>
@@ -464,7 +473,12 @@ function GroupCard({
       ) : (
         <View style={{ gap: space.sm, marginTop: space.xs }}>
           {group.hangouts.map((h) => (
-            <HangoutCard key={h.id} hangout={h} groupMemberCount={group.member_count} />
+            <HangoutCard
+              key={h.id}
+              hangout={h}
+              groupMemberCount={group.member_count}
+              proposer={group.members.find((m) => m.id === h.proposed_by) ?? null}
+            />
           ))}
         </View>
       )}
@@ -475,9 +489,12 @@ function GroupCard({
 function HangoutCard({
   hangout,
   groupMemberCount,
+  proposer,
 }: {
   hangout: HangoutWithResponses;
   groupMemberCount: number;
+  /** Who suggested this — shown so an invite always has a face on it. */
+  proposer: { id: string; label: string } | null;
 }) {
   const [responding, setResponding] = useState<ResponseStatus | null>(null);
   const myStatus = (hangout.myResponse?.status ?? 'pending') as ResponseStatus;
@@ -527,6 +544,15 @@ function HangoutCard({
           <Text style={styles.proposingBadge}>PROPOSING</Text>
         )}
       </View>
+
+      {proposer ? (
+        <View style={styles.proposerRow}>
+          <PersonAvatar id={proposer.id} name={proposer.label} size={20} />
+          <Text style={styles.proposerText}>
+            {proposer.label === 'You' ? 'You proposed this' : `Proposed by ${proposer.label}`}
+          </Text>
+        </View>
+      ) : null}
 
       {hangout.proposed_start ? (
         <Text style={styles.hangoutTime}>
@@ -809,6 +835,14 @@ const styles = StyleSheet.create({
     paddingVertical: 3,
   },
   memberChipText: { color: colors.textMuted, fontSize: 12 },
+  memberChipWithAvatar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingLeft: 3,
+  },
+  proposerRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 2 },
+  proposerText: { color: colors.textMuted, fontSize: 12 },
   cardSub: { color: colors.textMuted, fontSize: 13 },
   noHangout: { color: colors.textDim, fontSize: 12, fontStyle: 'italic', marginTop: 4 },
 

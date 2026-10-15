@@ -20,6 +20,7 @@ import { DeviceCalendarConnect } from '../../src/components/DeviceCalendarConnec
 import { GoogleCalendarConnect } from '../../src/components/GoogleCalendarConnect';
 import { HealthConnect } from '../../src/components/HealthConnect';
 import { Input } from '../../src/components/Input';
+import { PersonAvatar } from '../../src/components/PersonAvatar';
 import { PipelineStatus } from '../../src/components/PipelineStatus';
 import { Screen } from '../../src/components/Screen';
 import { useAuth } from '../../src/lib/auth-context';
@@ -173,11 +174,7 @@ export default function ProfileScreen() {
         {/* Identity */}
         <View style={styles.card}>
           <View style={styles.identityRow}>
-            <View style={styles.avatar}>
-              <Text style={styles.avatarText}>
-                {(profile?.first_name?.[0] ?? '?').toUpperCase()}
-              </Text>
-            </View>
+            <PersonAvatar id={user?.id} name={profile?.first_name} size={48} />
             <View style={{ flex: 1 }}>
               {editingName ? (
                 <View style={{ gap: space.xs }}>
@@ -442,11 +439,7 @@ function FriendRow({
       friction={2}
     >
       <View style={styles.friendRow}>
-        <View style={styles.friendAvatar}>
-          <Text style={styles.friendAvatarText}>
-            {(friend.first_name?.[0] ?? friend.handle?.[0] ?? '?').toUpperCase()}
-          </Text>
-        </View>
+        <PersonAvatar id={friend.id} name={friend.first_name ?? friend.handle} />
         <View style={{ flex: 1 }}>
           <Text style={styles.friendName}>
             {friend.first_name ?? friend.display_name ?? 'Unnamed'}
@@ -517,11 +510,7 @@ function PendingRequestRow({
 
   return (
     <View style={styles.pendingRow}>
-      <View style={styles.friendAvatar}>
-        <Text style={styles.friendAvatarText}>
-          {(req.user.first_name?.[0] ?? req.user.handle?.[0] ?? '?').toUpperCase()}
-        </Text>
-      </View>
+      <PersonAvatar id={req.user.id} name={req.user.first_name ?? req.user.handle} />
       <View style={{ flex: 1 }}>
         <Text style={styles.friendName}>
           {req.user.first_name ?? 'Unnamed'}
@@ -764,15 +753,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: space.md,
   },
-  avatar: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: colors.accentDim,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  avatarText: { color: colors.accent, fontSize: 20, fontWeight: '700' },
   name: { color: colors.text, fontSize: 18, fontWeight: '700' },
   editLink: { color: colors.accent, fontSize: 12, fontWeight: '600' },
   handle: { color: colors.accent, fontSize: 13, marginTop: 2, fontWeight: '500' },
@@ -912,15 +892,6 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     padding: space.sm,
   },
-  friendAvatar: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: colors.bgRaised,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  friendAvatarText: { color: colors.text, fontSize: 14, fontWeight: '700' },
   innerCircleLabel: { color: colors.accent, fontSize: 11, fontWeight: '600', marginTop: 2 },
   tierToggle: { paddingHorizontal: space.xs, paddingVertical: space.xs },
   tierStar: { fontSize: 20, color: colors.textDim },
