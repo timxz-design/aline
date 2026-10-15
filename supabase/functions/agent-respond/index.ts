@@ -731,8 +731,26 @@ const TOOLS = [
       properties: {
         goal_id: { type: 'string', description: 'The goal they completed a session for (from Active goals).' },
         date: { type: 'string', description: "Optional local date 'YYYY-MM-DD' of the session they did. Omit for their most recent past session." },
+        done_at: {
+          type: 'string',
+          description:
+            "When they actually did it, ISO 8601 LOCAL time (no Z), e.g. '2026-10-15T14:00:00'. Pass this whenever they say a time or that they did it earlier/later than planned (\"I did it at 14:00\", \"trained this morning\"): that day's session — even one still upcoming — moves to that time and is marked done, so the calendar shows when it really happened and the planned slot frees up.",
+        },
       },
       required: ['goal_id'],
+    },
+  },
+  {
+    name: 'answer_schedule_suggestion',
+    description:
+      "Record the user's answer to a plan change YOU suggested in chat (\"Your last 3 strength sessions were around 14:00, not 17:00 — move future sessions to 14:00–15:00?\"), listed under 'Open questions you asked'. accept=true re-times the plan and moves its future sessions; accept=false keeps the plan (not re-suggested for 30 days). If they want a DIFFERENT time than suggested, decline this and use the goal-plan tools instead.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        suggestion_id: { type: 'string', description: "The id from 'Open questions you asked'." },
+        accept: { type: 'boolean' },
+      },
+      required: ['suggestion_id', 'accept'],
     },
   },
   {
@@ -1990,7 +2008,7 @@ Deno.serve(async (req: Request) => {
   // that the user hasn't answered yet — so a reply like "yep" or "no, that's my
   // office" can be recorded against the right item.
   const askedSince = new Date(Date.now() - 3 * 86_400_000).toISOString();
-  const [openChecksRes, openPlacesRes, openRoutinesRes] = await Promise.all([
+  const [openChecksRes, openPlacesRes, openRoutinesRes, openSuggestionsRes, durationsRes] = await Promise.all([
     supabase
       .from('activity_log')
       .select('id, scheduled_start, calendar_events(title)')
@@ -2010,6 +2028,23 @@ Deno.serve(async (req: Request) => {
       .eq('inference_status', 'pending')
       .eq('active', true)
       .gte('last_asked_at', askedSince),
+    supabase
+      .from('schedule_suggestions')
+      .select('id, session_activity, from_start, to_start, from_duration, to_duration')
+      .eq('user_id', userId)
+      .eq('status', 'pending')
+      .gte('created_at', askedSince),
+    // Typical length per activity, from measured workouts (median of recent).
+    supabase
+      .from('health_workouts')
+      .select('activity_type, duration_min')
+      .eq('user_id', userId)
+      .gte('duration_min', 5)
+      // Trusted-data cutoff (app_config.reliable_data_since): earlier workout
+      // data was missing or inaccurate.
+      .gte('started_at', '2026-10-15T00:00:00Z')
+      .order('started_at', { ascending: false })
+      .limit(60),
   ]);
   const tz = profile.timezone ?? 'Europe/Ljubljana';
   const hm = (m: number | null) =>
@@ -2035,10 +2070,40 @@ Deno.serve(async (req: Request) => {
         `  - routine id ${r.id}: at ${r.places?.user_label ?? r.places?.name ?? 'a place'} on ${r.day_of_week != null ? DOW[r.day_of_week] : '?'} ${hm(r.start_minute)}–${hm(r.end_minute)} — a regular thing? → answer_routine_question`,
     ),
   ];
+  for (const sgg of (openSuggestionsRes.data ?? []) as {
+    id: string;
+    session_activity: string;
+    from_start: string;
+    to_start: string;
+    from_duration: number;
+    to_duration: number;
+  }[]) {
+    openQuestionLines.push(
+      `  - plan change id ${sgg.id}: move "${sgg.session_activity}" from ${sgg.from_start} (${sgg.from_duration} min) to ${sgg.to_start} (${sgg.to_duration} min)? → answer_schedule_suggestion`,
+    );
+  }
   const openQuestionsBlock =
     openQuestionLines.length === 0
       ? ''
       : `Open questions you asked in chat (unanswered). If the user's message answers one — even briefly ("yep", "skipped it", "no that's my office") — record it with the matching tool, then reply naturally. Don't re-ask these yourself:\n${openQuestionLines.join('\n')}`;
+
+  // Learned activity lengths — use them when placing/moving blocks so free time
+  // is computed from how long things really take, not a default.
+  const byType = new Map<string, number[]>();
+  for (const w of (durationsRes.data ?? []) as { activity_type: string; duration_min: number }[]) {
+    const list = byType.get(w.activity_type) ?? [];
+    if (list.length < 10) list.push(Number(w.duration_min));
+    byType.set(w.activity_type, list);
+  }
+  const durationLines = [...byType.entries()]
+    .filter(([, l]) => l.length >= 3)
+    .map(([t, l]) => {
+      const sorted = [...l].sort((a, b) => a - b);
+      return `  - ${t}: usually ~${Math.round(sorted[Math.floor(sorted.length / 2)])} min (from ${l.length} measured sessions)`;
+    });
+  const durationsBlock = durationLines.length
+    ? `Learned activity lengths (measured). When you create or move a block for one of these, use this length rather than a guess:\n${durationLines.join('\n')}`
+    : '';
 
   const systemArray = [
     {
@@ -2048,7 +2113,7 @@ Deno.serve(async (req: Request) => {
     },
     {
       type: 'text' as const,
-      text: openQuestionsBlock ? `${dynamicBlock}\n\n${openQuestionsBlock}` : dynamicBlock,
+      text: [dynamicBlock, openQuestionsBlock, durationsBlock].filter(Boolean).join('\n\n'),
     },
   ];
 
@@ -3717,6 +3782,21 @@ async function executeTool(
     };
   }
 
+  if (name === 'answer_schedule_suggestion') {
+    const id = String(input.suggestion_id ?? '').trim();
+    if (!id) return { ok: false, message: 'suggestion_id is required' };
+    const accept = input.accept === true;
+    const { data, error } = await supabase.rpc('apply_schedule_suggestion', { _id: id, _accept: accept });
+    if (error) return { ok: false, message: `Couldn't apply it: ${error.message}` };
+    const r = (data ?? {}) as { applied?: boolean; new_time?: string; new_duration?: number; created?: number };
+    return {
+      ok: true,
+      message: r.applied
+        ? `Plan updated: future sessions now start ${r.new_time} for ${r.new_duration} min (${r.created ?? 0} placed on the calendar). Confirm briefly.`
+        : "Kept the plan as it is — won't suggest this again for a month.",
+    };
+  }
+
   if (name === 'answer_activity_check') {
     const checkId = String(input.check_id ?? '').trim();
     const result = String(input.result ?? '');
@@ -3778,7 +3858,9 @@ async function executeTool(
     const goalId = String(input.goal_id ?? '');
     if (!goalId) return { ok: false, message: 'goal_id is required' };
     const date = input.date ? String(input.date) : null;
-    const { data, error } = await supabase.rpc('mark_goal_done', { _goal_id: goalId, _date: date });
+    const doneAt = input.done_at ? normalizeIsoToUtc(String(input.done_at), userTimezone) : null;
+    if (input.done_at && !doneAt) return { ok: false, message: `done_at "${input.done_at}" is not a valid ISO 8601 datetime` };
+    const { data, error } = await supabase.rpc('mark_goal_done', { _goal_id: goalId, _date: date, _at: doneAt });
     if (error) return { ok: false, message: `couldn't record it: ${error.message}` };
     const res = (data ?? {}) as { marked?: boolean; reason?: string };
     if (!res.marked) {
@@ -3786,6 +3868,9 @@ async function executeTool(
         ok: true,
         message: `No matching past session to mark (${res.reason ?? 'none found'}). If they just did an unscheduled session, acknowledge it; otherwise the block may not have been on the calendar.`,
       };
+    }
+    if (doneAt) {
+      return { ok: true, message: "Recorded as done and moved that day's session to when they actually did it — the calendar now shows the real time and the planned slot is free. Acknowledge briefly." };
     }
     return { ok: true, message: 'Recorded as done — it now counts toward their weekly pace. Acknowledge briefly and encouragingly (no fuss).' };
   }
