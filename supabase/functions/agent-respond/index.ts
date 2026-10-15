@@ -736,6 +736,47 @@ const TOOLS = [
     },
   },
   {
+    name: 'answer_activity_check',
+    description:
+      "Record the user's answer to an activity question YOU asked in chat (\"Did you get your strength training in yesterday?\") — see 'Open questions you asked'. done = they did it as planned; elsewhere = did it but somewhere else (pass actual_label, e.g. 'park'); skipped = didn't do it. Use this instead of mark_goal_done when the answer is about an open question.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        check_id: { type: 'string', description: "The id from 'Open questions you asked'." },
+        result: { type: 'string', enum: ['done', 'elsewhere', 'skipped'] },
+        actual_label: { type: 'string', description: "Optional: where/what they actually did, for 'elsewhere'." },
+      },
+      required: ['check_id', 'result'],
+    },
+  },
+  {
+    name: 'answer_place_question',
+    description:
+      "Record the user's answer to a place question YOU asked (\"is the place you've been 5 times your gym?\"). confirm = your guess is right; relabel = they told you what it really is (pass label, e.g. 'office', 'Ana's flat'); not_a_place = it isn't meaningful / stop tracking it.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        place_id: { type: 'string', description: "The id from 'Open questions you asked'." },
+        answer: { type: 'string', enum: ['confirm', 'relabel', 'not_a_place'] },
+        label: { type: 'string', description: "Required for 'relabel'." },
+      },
+      required: ['place_id', 'answer'],
+    },
+  },
+  {
+    name: 'answer_routine_question',
+    description:
+      "Record the user's answer to a routine question YOU asked (\"you're usually at X on Tuesdays 18:00–19:30 — should I plan around it?\"). confirm = yes, it's a regular thing; reject = no, don't treat it as a routine.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        routine_id: { type: 'string', description: "The id from 'Open questions you asked'." },
+        answer: { type: 'string', enum: ['confirm', 'reject'] },
+      },
+      required: ['routine_id', 'answer'],
+    },
+  },
+  {
     name: 'save_event',
     description:
       "Publish a LOCAL EVENT to ALINE's shared town listing — a happening others could discover and attend (concert, market, quiz night, match, workshop, a hangout the user is hosting). NOT for the user's personal appointments/schedule — those go on the calendar via propose_change_set, never here. Use when the user tells you about something happening ('there's a concert at Kino Šiška Friday 8pm', 'add the Saturday farmers market', 'I'm hosting a BBQ for friends Sunday'). " +
@@ -1930,6 +1971,60 @@ Deno.serve(async (req: Request) => {
   // block (current timestamp) follows uncached. On subsequent requests within
   // ~5 minutes with the same static block, the cached portion costs 10% of
   // normal — meaningful savings on chatty sessions.
+  // Questions the agent asked in chat (posted by post_curiosity_questions) and
+  // that the user hasn't answered yet — so a reply like "yep" or "no, that's my
+  // office" can be recorded against the right item.
+  const askedSince = new Date(Date.now() - 3 * 86_400_000).toISOString();
+  const [openChecksRes, openPlacesRes, openRoutinesRes] = await Promise.all([
+    supabase
+      .from('activity_log')
+      .select('id, scheduled_start, calendar_events(title)')
+      .eq('user_id', userId)
+      .eq('result', 'needs_confirm')
+      .gte('last_asked_at', askedSince),
+    supabase
+      .from('places')
+      .select('id, name, user_label, visit_count')
+      .eq('user_id', userId)
+      .eq('inference_status', 'pending')
+      .gte('last_asked_at', askedSince),
+    supabase
+      .from('routines')
+      .select('id, day_of_week, start_minute, end_minute, places(name, user_label)')
+      .eq('user_id', userId)
+      .eq('inference_status', 'pending')
+      .eq('active', true)
+      .gte('last_asked_at', askedSince),
+  ]);
+  const tz = profile.timezone ?? 'Europe/Ljubljana';
+  const hm = (m: number | null) =>
+    m == null ? '?' : `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+  const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const openQuestionLines = [
+    ...((openChecksRes.data ?? []) as unknown as { id: string; scheduled_start: string; calendar_events: { title: string | null } | null }[]).map(
+      (c) =>
+        `  - activity check id ${c.id}: did they do "${c.calendar_events?.title ?? 'the activity'}" on ${new Date(c.scheduled_start).toLocaleString('en-GB', { timeZone: tz, weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}? → answer_activity_check`,
+    ),
+    ...((openPlacesRes.data ?? []) as { id: string; name: string | null; user_label: string | null; visit_count: number }[]).map(
+      (pl) =>
+        `  - place id ${pl.id}: you asked whether it's ${pl.user_label ?? pl.name ?? '(unnamed — you asked what it is)'} (${pl.visit_count} visits) → answer_place_question`,
+    ),
+    ...((openRoutinesRes.data ?? []) as unknown as {
+      id: string;
+      day_of_week: number | null;
+      start_minute: number | null;
+      end_minute: number | null;
+      places: { name: string | null; user_label: string | null } | null;
+    }[]).map(
+      (r) =>
+        `  - routine id ${r.id}: at ${r.places?.user_label ?? r.places?.name ?? 'a place'} on ${r.day_of_week != null ? DOW[r.day_of_week] : '?'} ${hm(r.start_minute)}–${hm(r.end_minute)} — a regular thing? → answer_routine_question`,
+    ),
+  ];
+  const openQuestionsBlock =
+    openQuestionLines.length === 0
+      ? ''
+      : `Open questions you asked in chat (unanswered). If the user's message answers one — even briefly ("yep", "skipped it", "no that's my office") — record it with the matching tool, then reply naturally. Don't re-ask these yourself:\n${openQuestionLines.join('\n')}`;
+
   const systemArray = [
     {
       type: 'text' as const,
@@ -1938,7 +2033,7 @@ Deno.serve(async (req: Request) => {
     },
     {
       type: 'text' as const,
-      text: dynamicBlock,
+      text: openQuestionsBlock ? `${dynamicBlock}\n\n${openQuestionsBlock}` : dynamicBlock,
     },
   ];
 
@@ -3605,6 +3700,63 @@ async function executeTool(
         }. The plan is now LIVE. Tell the user what landed${skipped ? ' and what was skipped' : ''}.`,
       }),
     };
+  }
+
+  if (name === 'answer_activity_check') {
+    const checkId = String(input.check_id ?? '').trim();
+    const result = String(input.result ?? '');
+    if (!checkId) return { ok: false, message: 'check_id is required' };
+    if (!['done', 'elsewhere', 'skipped'].includes(result)) {
+      return { ok: false, message: 'result must be done, elsewhere or skipped' };
+    }
+    const { error } = await supabase.rpc('resolve_activity_check', {
+      _id: checkId,
+      _result: result,
+      _actual_label: input.actual_label ? String(input.actual_label) : null,
+    });
+    if (error) return { ok: false, message: `Couldn't record it: ${error.message}` };
+    return { ok: true, message: `Recorded: ${result}.` };
+  }
+
+  if (name === 'answer_place_question') {
+    const placeId = String(input.place_id ?? '').trim();
+    const answer = String(input.answer ?? '');
+    const label = input.label ? String(input.label).trim() : '';
+    if (!placeId) return { ok: false, message: 'place_id is required' };
+    const now = new Date().toISOString();
+    let patch: Record<string, unknown>;
+    if (answer === 'confirm') patch = { inference_status: 'confirmed' };
+    else if (answer === 'relabel') {
+      if (!label) return { ok: false, message: "label is required for 'relabel'" };
+      patch = { user_label: label, inference_status: 'corrected' };
+    } else if (answer === 'not_a_place') patch = { is_hidden: true, inference_status: 'corrected' };
+    else return { ok: false, message: 'answer must be confirm, relabel or not_a_place' };
+    const { error } = await supabase
+      .from('places')
+      .update({ ...patch, last_asked_at: now, updated_at: now })
+      .eq('id', placeId)
+      .eq('user_id', userId);
+    if (error) return { ok: false, message: `Couldn't save it: ${error.message}` };
+    return { ok: true, message: answer === 'relabel' ? `Saved: that place is "${label}".` : `Saved (${answer}).` };
+  }
+
+  if (name === 'answer_routine_question') {
+    const routineId = String(input.routine_id ?? '').trim();
+    const answer = String(input.answer ?? '');
+    if (!routineId) return { ok: false, message: 'routine_id is required' };
+    if (!['confirm', 'reject'].includes(answer)) return { ok: false, message: 'answer must be confirm or reject' };
+    const now = new Date().toISOString();
+    const patch =
+      answer === 'confirm'
+        ? { inference_status: 'confirmed' }
+        : { inference_status: 'corrected', active: false };
+    const { error } = await supabase
+      .from('routines')
+      .update({ ...patch, last_asked_at: now, updated_at: now })
+      .eq('id', routineId)
+      .eq('user_id', userId);
+    if (error) return { ok: false, message: `Couldn't save it: ${error.message}` };
+    return { ok: true, message: answer === 'confirm' ? 'Saved — I will plan around it.' : "Saved — I won't treat it as a routine." };
   }
 
   if (name === 'mark_goal_done') {

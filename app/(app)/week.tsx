@@ -11,11 +11,9 @@ import {
 } from 'react-native';
 import { AvatarStack, otherParticipants, planColor } from '../../src/components/AvatarStack';
 import { CalendarReconnectBanner } from '../../src/components/CalendarReconnectBanner';
-import { CuriosityCard } from '../../src/components/CuriosityCard';
 import { HangoutSheet } from '../../src/components/HangoutSheet';
 import { Screen } from '../../src/components/Screen';
 import { useAuth } from '../../src/lib/auth-context';
-import { useCuriosity } from '../../src/lib/use-curiosity';
 import {
   DAY_LABELS,
   addDays,
@@ -50,7 +48,6 @@ export default function WeekScreen() {
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
-  const { item: curiosityItem, refresh: refreshCuriosity } = useCuriosity();
 
   // Current time — updates every minute so the red line stays accurate.
   const [now, setNow] = useState(() => new Date());
@@ -420,11 +417,6 @@ export default function WeekScreen() {
                 onOpen={() => setOpenPlanId(p.hangout_id)}
               />
             ))}
-          </View>
-        ) : null}
-        {curiosityItem ? (
-          <View style={{ paddingHorizontal: space.lg, paddingBottom: space.md }}>
-            <CuriosityCard item={curiosityItem} onAnswered={refreshCuriosity} />
           </View>
         ) : null}
         <View style={styles.timeline}>
