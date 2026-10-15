@@ -27,6 +27,7 @@ import {
   GEOFENCE_TASK,
   PERIODIC_LOCATION_TASK,
 } from './backgroundGps';
+import { fetchCurrentWifi, isWifiInfoAvailable } from '../../modules/wifi-info';
 import { getDeviceId } from './device-id';
 import { hasHealthAuthorization } from './health';
 import { supabase } from './supabase';
@@ -107,12 +108,18 @@ async function probeWifi(): Promise<string | null> {
     const s = await NetInfo.refresh();
     if (s.type !== 'wifi') return s.type;
     const d = (s.details ?? {}) as { ssid?: string | null; bssid?: string | null };
-    const ssid = d.ssid == null ? 'null' : d.ssid === '' ? 'empty' : 'present';
-    const bssid =
-      d.bssid == null ? 'null'
-        : BLANK_BSSIDS.has(d.bssid.toLowerCase()) ? 'placeholder'
-          : 'present';
-    return `wifi ssid=${ssid} bssid=${bssid}`;
+    const describe = (v: string | null | undefined, isBssid: boolean) =>
+      v == null ? 'null'
+        : v === '' ? 'empty'
+          : isBssid && BLANK_BSSIDS.has(v.toLowerCase()) ? 'placeholder'
+            : 'present';
+    // Both sources, so the probe shows which one iOS actually answers.
+    const native = isWifiInfoAvailable() ? await fetchCurrentWifi() : undefined;
+    const nativePart =
+      native === undefined ? 'native=absent'
+        : native === null ? 'native=null'
+          : `native ssid=${describe(native.ssid, false)} bssid=${describe(native.bssid, true)}`;
+    return `wifi netinfo ssid=${describe(d.ssid, false)} bssid=${describe(d.bssid, true)} · ${nativePart}`;
   } catch (e) {
     return `error ${(e as Error).message}`.slice(0, 200);
   }

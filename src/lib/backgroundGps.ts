@@ -25,6 +25,7 @@ import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
 import { Platform } from 'react-native';
 import { encodeGeohash } from './clustering';
+import { fetchCurrentWifi } from '../../modules/wifi-info';
 import { getDeviceId } from './device-id';
 import { supabase } from './supabase';
 
@@ -127,9 +128,12 @@ async function readNetwork(): Promise<{
     if (state.type !== NetInfoStateType.wifi) {
       return { network_type, wifi_bssid_hash: null, wifi_ssid_hash: null };
     }
+    // Apple's current API first (NEHotspotNetwork, local module); NetInfo's
+    // deprecated CNCopyCurrentNetworkInfo returned nothing on iOS 26.
+    const native = await fetchCurrentWifi();
     const [wifi_bssid_hash, wifi_ssid_hash] = await Promise.all([
-      hashWifi(state.details.bssid),
-      hashWifi(state.details.ssid),
+      hashWifi(native?.bssid ?? state.details.bssid),
+      hashWifi(native?.ssid ?? state.details.ssid),
     ]);
     return { network_type, wifi_bssid_hash, wifi_ssid_hash };
   } catch {
