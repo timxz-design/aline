@@ -9,7 +9,7 @@ import { StyleSheet, Text, View } from 'react-native';
  * read oddly on adults. All palette colours are dark enough for white text.
  */
 const PALETTE = [
-  '#2E7D78', // teal
+  '#1E6091', // ocean (teal is reserved for group plans)
   '#3D5A99', // indigo
   '#8A4F7D', // plum
   '#B5543C', // terracotta

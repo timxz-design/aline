@@ -138,10 +138,13 @@ export function routeForNotification(data: Record<string, unknown> | undefined):
   switch (t) {
     case 'hangout_proposed':
     case 'hangout_confirmed':
-    case 'hangout_cancelled':
-      // For now, all hangout-related pushes land on the Groups tab.
-      // (Future: deep-link to the specific hangout detail when we have a route.)
-      return '/(app)/groups';
+    case 'hangout_cancelled': {
+      // Open the plan sheet for that hangout on My Week.
+      const hid = (data as { hangout_id?: string }).hangout_id;
+      return typeof hid === 'string' && hid
+        ? `/(app)/week?plan=${encodeURIComponent(hid)}`
+        : '/(app)/week';
+    }
 
     case 'friend_request':
     case 'friend_accepted':

@@ -1,3 +1,4 @@
+import { useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
@@ -8,8 +9,10 @@ import {
   Text,
   View,
 } from 'react-native';
+import { AvatarStack, otherParticipants, planColor } from '../../src/components/AvatarStack';
 import { CalendarReconnectBanner } from '../../src/components/CalendarReconnectBanner';
 import { CuriosityCard } from '../../src/components/CuriosityCard';
+import { HangoutSheet } from '../../src/components/HangoutSheet';
 import { Screen } from '../../src/components/Screen';
 import { useAuth } from '../../src/lib/auth-context';
 import { useCuriosity } from '../../src/lib/use-curiosity';
@@ -24,6 +27,7 @@ import {
   getGoogleCalendarStatus,
   syncGoogleCalendar,
 } from '../../src/lib/google-calendar';
+import { getParticipantsFor, type Participant } from '../../src/lib/hangouts';
 import { supabase } from '../../src/lib/supabase';
 import type { CalendarEvent } from '../../src/types/database';
 import { colors, font, radius, space } from '../../src/theme';
@@ -111,6 +115,64 @@ export default function WeekScreen() {
     loadUpcoming();
   }, [loadUpcoming]);
 
+  // Who is in each visible plan — drives the block colour (the other person's
+  // colour for a 1:1, the group colour for more) and the initials shown on it.
+  const [participants, setParticipants] = useState<Map<string, Participant[]>>(new Map());
+  useEffect(() => {
+    const ids = [...new Set([...events, ...upcoming].map((e) => e.hangout_id).filter((x): x is string => !!x))];
+    let cancelled = false;
+    getParticipantsFor(ids).then((m) => {
+      if (!cancelled) setParticipants(m);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [events, upcoming]);
+  const [openPlanId, setOpenPlanId] = useState<string | null>(null);
+
+  // Deep link from a plan notification: /(app)/week?plan=<hangout id>.
+  const { plan: planParam } = useLocalSearchParams<{ plan?: string }>();
+  useEffect(() => {
+    if (typeof planParam === 'string' && planParam) setOpenPlanId(planParam);
+  }, [planParam]);
+
+  // Plans waiting for my answer. Not on the calendar yet (only confirmed plans
+  // are), and an invitee outside the plan's group never sees it in Groups — so
+  // this is the one place an invite is always visible.
+  type Invite = { hangout_id: string; title: string | null; proposed_start: string | null; venue_name: string | null };
+  const [invites, setInvites] = useState<Invite[]>([]);
+  const loadInvites = useCallback(async () => {
+    if (!user) return;
+    const { data, error } = await supabase
+      .from('hangout_responses')
+      .select('hangout_id, hangouts!inner(title, proposed_start, venue_name, status)')
+      .eq('user_id', user.id)
+      .eq('status', 'pending')
+      .in('hangouts.status', ['proposing', 'confirmed']);
+    if (error) {
+      console.warn('Failed to load invites:', error.message);
+      return;
+    }
+    const nowMs = Date.now();
+    setInvites(
+      ((data ?? []) as unknown as {
+        hangout_id: string;
+        hangouts: { title: string | null; proposed_start: string | null; venue_name: string | null };
+      }[])
+        .map((r) => ({ hangout_id: r.hangout_id, ...r.hangouts }))
+        .filter((i) => !i.proposed_start || new Date(i.proposed_start).getTime() > nowMs)
+        .sort((a, b) => (a.proposed_start ?? '').localeCompare(b.proposed_start ?? '')),
+    );
+  }, [user]);
+  useEffect(() => {
+    loadInvites();
+  }, [loadInvites]);
+  const inviteIds = useMemo(() => invites.map((i) => i.hangout_id), [invites]);
+  const [inviteParticipants, setInviteParticipants] = useState<Map<string, Participant[]>>(new Map());
+  useEffect(() => {
+    getParticipantsFor(inviteIds).then(setInviteParticipants);
+  }, [inviteIds]);
+
   /**
    * Refresh button: if the user has Google connected, run a sync first
    * (which writes new/changed events into calendar_events), then reload.
@@ -123,11 +185,11 @@ export default function WeekScreen() {
       if (status.connected) {
         await syncGoogleCalendar();
       }
-      await Promise.all([loadEvents(), loadUpcoming()]);
+      await Promise.all([loadEvents(), loadUpcoming(), loadInvites()]);
     } finally {
       setSyncing(false);
     }
-  }, [loadEvents, loadUpcoming]);
+  }, [loadEvents, loadUpcoming, loadInvites]);
 
   const eventsForSelectedDay = useMemo(
     () => events.filter((ev) => sameDay(new Date(ev.start_at), selectedDate)),
@@ -265,11 +327,63 @@ export default function WeekScreen() {
         showsVerticalScrollIndicator={false}
       >
         <CalendarReconnectBanner />
+        {invites.length > 0 ? (
+          <View style={styles.upcomingSection}>
+            <Text style={styles.upcomingHeader}>Waiting for your answer</Text>
+            {invites.map((inv) => {
+              const people = inviteParticipants.get(inv.hangout_id);
+              const others = people ? otherParticipants(people, user?.id) : [];
+              const accent = people ? planColor(people, user?.id) : colors.eventCoordinated;
+              return (
+                <Pressable
+                  key={inv.hangout_id}
+                  onPress={() => setOpenPlanId(inv.hangout_id)}
+                  style={({ pressed }) => [
+                    styles.upcomingCard,
+                    { borderLeftWidth: 3, borderLeftColor: accent },
+                    pressed && { opacity: 0.85 },
+                  ]}
+                >
+                  {others.length > 0 ? (
+                    <AvatarStack people={others} size={26} />
+                  ) : (
+                    <View style={[styles.upcomingDot, { backgroundColor: accent }]} />
+                  )}
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.upcomingTitle} numberOfLines={1}>
+                      {inv.title || 'Plan'}
+                    </Text>
+                    <Text style={styles.upcomingWhen}>
+                      {inv.proposed_start
+                        ? new Date(inv.proposed_start).toLocaleString(undefined, {
+                            weekday: 'short',
+                            day: 'numeric',
+                            month: 'short',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                            hour12: false,
+                          })
+                        : 'Time not set yet'}
+                      {inv.venue_name ? ` · ${inv.venue_name}` : ''}
+                    </Text>
+                  </View>
+                  <Text style={styles.answerLink}>Answer ›</Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        ) : null}
         {upcoming.length > 0 ? (
           <View style={styles.upcomingSection}>
             <Text style={styles.upcomingHeader}>Upcoming hangouts</Text>
             {upcoming.map((h) => (
-              <UpcomingHangout key={h.id} event={h} />
+              <UpcomingHangout
+                key={h.id}
+                event={h}
+                participants={h.hangout_id ? participants.get(h.hangout_id) : undefined}
+                meId={user?.id}
+                onOpen={h.hangout_id ? () => setOpenPlanId(h.hangout_id) : undefined}
+              />
             ))}
           </View>
         ) : null}
@@ -306,6 +420,9 @@ export default function WeekScreen() {
                 key={ev.id}
                 event={ev}
                 indent={Math.min(depth, 3)}
+                participants={ev.hangout_id ? participants.get(ev.hangout_id) : undefined}
+                meId={user?.id}
+                onOpenPlan={ev.hangout_id ? () => setOpenPlanId(ev.hangout_id) : undefined}
                 onChange={() => {
                   loadEvents();
                   loadUpcoming();
@@ -326,6 +443,15 @@ export default function WeekScreen() {
           ) : null}
         </View>
       </ScrollView>
+      <HangoutSheet
+        hangoutId={openPlanId}
+        onClose={() => setOpenPlanId(null)}
+        onChanged={() => {
+          loadEvents();
+          loadUpcoming();
+          loadInvites();
+        }}
+      />
     </Screen>
   );
 }
@@ -345,7 +471,19 @@ function CurrentTimeLine({ now }: { now: Date }) {
   );
 }
 
-function UpcomingHangout({ event }: { event: CalendarEvent }) {
+function UpcomingHangout({
+  event,
+  participants,
+  meId,
+  onOpen,
+}: {
+  event: CalendarEvent;
+  participants?: Participant[];
+  meId?: string;
+  onOpen?: () => void;
+}) {
+  const others = participants ? otherParticipants(participants, meId) : [];
+  const accent = participants ? planColor(participants, meId) : colors.eventCoordinated;
   const when = new Date(event.start_at).toLocaleString(undefined, {
     weekday: 'short',
     day: 'numeric',
@@ -360,8 +498,16 @@ function UpcomingHangout({ event }: { event: CalendarEvent }) {
     Linking.openURL(url).catch(() => {});
   };
   return (
-    <View style={styles.upcomingCard}>
-      <View style={[styles.upcomingDot, { backgroundColor: colors.eventCoordinated }]} />
+    <Pressable
+      onPress={onOpen}
+      disabled={!onOpen}
+      style={({ pressed }) => [styles.upcomingCard, { borderLeftWidth: 3, borderLeftColor: accent }, pressed && { opacity: 0.85 }]}
+    >
+      {others.length > 0 ? (
+        <AvatarStack people={others} size={26} />
+      ) : (
+        <View style={[styles.upcomingDot, { backgroundColor: accent }]} />
+      )}
       <View style={{ flex: 1 }}>
         <Text style={styles.upcomingTitle} numberOfLines={1}>
           {event.title || 'Hangout'}
@@ -377,7 +523,7 @@ function UpcomingHangout({ event }: { event: CalendarEvent }) {
           <Text style={styles.upcomingNoVenue}>No place set yet</Text>
         )}
       </View>
-    </View>
+    </Pressable>
   );
 }
 
@@ -394,10 +540,17 @@ function EventBlock({
   event,
   onChange,
   indent = 0,
+  participants,
+  meId,
+  onOpenPlan,
 }: {
   event: CalendarEvent;
   onChange: () => void;
   indent?: number;
+  /** Set for coordinated plans: colours the block and shows who's in it. */
+  participants?: Participant[];
+  meId?: string;
+  onOpenPlan?: () => void;
 }) {
   const start = new Date(event.start_at);
   const end = new Date(event.end_at);
@@ -406,7 +559,10 @@ function EventBlock({
   const dayStartMin = HOURS[0] * 60;
   const top = ((startMin - dayStartMin) / 60) * HOUR_HEIGHT;
   const height = Math.max(((endMin - startMin) / 60) * HOUR_HEIGHT, 28);
-  const accent = EVENT_COLORS[event.event_type ?? 'fixed'] ?? colors.eventFixed;
+  const others = participants ? otherParticipants(participants, meId) : [];
+  const accent = participants
+    ? planColor(participants, meId)
+    : EVENT_COLORS[event.event_type ?? 'fixed'] ?? colors.eventFixed;
   const wasMoved = !!event.original_start_at;
   const isRoutine = event.event_type === 'routine';
 
@@ -454,6 +610,7 @@ function EventBlock({
         </Text>
         {wasMoved ? <Text style={styles.movedBadge}>↔ moved</Text> : null}
         {isRoutine ? <Text style={styles.movedBadge}>inferred</Text> : null}
+        {others.length > 0 ? <AvatarStack people={others} size={18} /> : null}
       </View>
       <Text style={styles.eventTime}>
         {formatHM(start)} – {formatHM(end)}
@@ -485,6 +642,13 @@ function EventBlock({
       </Pressable>
     );
   }
+  if (onOpenPlan) {
+    return (
+      <Pressable onPress={onOpenPlan} style={blockStyle}>
+        {body}
+      </Pressable>
+    );
+  }
   return <View style={blockStyle}>{body}</View>;
 }
 
@@ -498,6 +662,7 @@ function formatHM(d: Date): string {
 }
 
 const styles = StyleSheet.create({
+  answerLink: { color: colors.accent, fontSize: 13, fontWeight: '700' },
   header: {
     paddingHorizontal: space.lg,
     paddingTop: space.md,

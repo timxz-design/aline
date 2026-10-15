@@ -12,6 +12,7 @@ import {
   View,
 } from 'react-native';
 import { Swipeable } from 'react-native-gesture-handler';
+import { HangoutSheet } from '../../src/components/HangoutSheet';
 import { PersonAvatar } from '../../src/components/PersonAvatar';
 import { AddMembersModal } from '../../src/components/AddMembersModal';
 import { Button } from '../../src/components/Button';
@@ -497,6 +498,7 @@ function HangoutCard({
   proposer: { id: string; label: string } | null;
 }) {
   const [responding, setResponding] = useState<ResponseStatus | null>(null);
+  const [showDetails, setShowDetails] = useState(false);
   const myStatus = (hangout.myResponse?.status ?? 'pending') as ResponseStatus;
   const confirmedCount = hangout.responses.filter((r) => r.status === 'confirmed').length;
   const declinedCount = hangout.responses.filter((r) => r.status === 'declined').length;
@@ -521,7 +523,8 @@ function HangoutCard({
   };
 
   return (
-    <View
+    <Pressable
+      onPress={() => setShowDetails(true)}
       style={[
         styles.hangoutCard,
         isConfirmed && styles.hangoutCardConfirmed,
@@ -628,7 +631,10 @@ function HangoutCard({
           </Text>
         </Pressable>
       ) : null}
-    </View>
+      <Text style={styles.detailsLink}>Details, people & invites ›</Text>
+      {/* Realtime refreshes the list after changes made in the sheet. */}
+      <HangoutSheet hangoutId={showDetails ? hangout.id : null} onClose={() => setShowDetails(false)} />
+    </Pressable>
   );
 }
 
@@ -841,6 +847,7 @@ const styles = StyleSheet.create({
     gap: 6,
     paddingLeft: 3,
   },
+  detailsLink: { color: colors.accent, fontSize: 12, fontWeight: '600', marginTop: 2 },
   proposerRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 2 },
   proposerText: { color: colors.textMuted, fontSize: 12 },
   cardSub: { color: colors.textMuted, fontSize: 13 },

@@ -904,6 +904,7 @@ export type Database = {
           direct_user_id: string | null
           group_id: string | null
           id: string
+          invite_policy: string
           min_attendees: number
           proposed_by: string
           proposed_end: string | null
@@ -924,6 +925,7 @@ export type Database = {
           direct_user_id?: string | null
           group_id?: string | null
           id?: string
+          invite_policy?: string
           min_attendees?: number
           proposed_by: string
           proposed_end?: string | null
@@ -944,6 +946,7 @@ export type Database = {
           direct_user_id?: string | null
           group_id?: string | null
           id?: string
+          invite_policy?: string
           min_attendees?: number
           proposed_by?: string
           proposed_end?: string | null
@@ -1359,23 +1362,50 @@ export type Database = {
         }
         Returns: Json
       }
+      _hangout_can_invite: {
+        Args: {
+          _caller: string
+          _h: Database["public"]["Tables"]["hangouts"]["Row"]
+        }
+        Returns: boolean
+      }
+      _hangout_invite_block_reason: {
+        Args: {
+          _caller: string
+          _h: Database["public"]["Tables"]["hangouts"]["Row"]
+          _invitee: string
+        }
+        Returns: string
+      }
+      _materialize_goal_plan: { Args: { _plan_id: string }; Returns: Json }
       add_friends_to_group: {
         Args: { _group_id: string; _user_ids: string[] }
         Returns: number
       }
       apply_change_set: { Args: { _id: string }; Returns: Json }
-      resolve_activity_check: {
-        Args: { _id: string; _result: string; _actual_label?: string }
+      are_friends: { Args: { _a: string; _b: string }; Returns: boolean }
+      bump_activity_pattern: {
+        Args: {
+          _bucket: number
+          _dow: number
+          _key: string
+          _place: string
+          _ts: string
+          _user: string
+        }
         Returns: undefined
       }
-      are_friends: { Args: { _a: string; _b: string }; Returns: boolean }
       cancel_hangout: { Args: { _hangout_id: string }; Returns: undefined }
+      check_activities: { Args: never; Returns: undefined }
       commit_goal_plan: { Args: { _goal_id: string }; Returns: Json }
       create_group: {
         Args: { _description?: string; _group_type?: string; _name: string }
         Returns: string
       }
       disconnect_google_calendar: { Args: never; Returns: undefined }
+      evaluate_active_blocks: { Args: never; Returns: undefined }
+      expire_stale_change_sets: { Args: never; Returns: undefined }
+      expire_stale_hangouts: { Args: never; Returns: undefined }
       find_mutual_slots: {
         Args: {
           _duration_minutes?: number
@@ -1384,6 +1414,7 @@ export type Database = {
           _latest: string
           _latest_hour?: number
           _max_results?: number
+          _min_free_count?: number
           _time_preference?: string
           _user_ids: string[]
         }
@@ -1398,6 +1429,30 @@ export type Database = {
           id: string
         }[]
       }
+      friend_tier_to: {
+        Args: { _owner: string; _viewer: string }
+        Returns: string
+      }
+      get_friend_schedule: {
+        Args: { _friend_id: string }
+        Returns: {
+          end_at: string
+          event_type: string
+          location: string
+          start_at: string
+          title: string
+        }[]
+      }
+      get_hangout_details: { Args: { _hangout_id: string }; Returns: Json }
+      get_participant_feasibility_context: {
+        Args: {
+          _participant_ids: string[]
+          _requester: string
+          _slot_end: string
+          _slot_start: string
+        }
+        Returns: Json
+      }
       google_calendar_status: {
         Args: never
         Returns: {
@@ -1406,13 +1461,52 @@ export type Database = {
           last_synced_at: string
         }[]
       }
+      hangout_invite_candidates: {
+        Args: { _hangout_id: string }
+        Returns: {
+          allowed: boolean
+          first_name: string
+          handle: string
+          reason: string
+          user_id: string
+        }[]
+      }
+      hangout_participants_for: {
+        Args: { _hangout_ids: string[] }
+        Returns: {
+          first_name: string
+          handle: string
+          hangout_id: string
+          status: string
+          user_id: string
+        }[]
+      }
+      invite_to_hangout: {
+        Args: { _hangout_id: string; _user_ids: string[] }
+        Returns: number
+      }
+      invoke_google_calendar_sync: { Args: never; Returns: undefined }
+      invoke_proactive_weather: { Args: never; Returns: undefined }
       is_group_admin: { Args: { _group_id: string }; Returns: boolean }
       is_group_member: { Args: { _group_id: string }; Returns: boolean }
+      is_hangout_participant: {
+        Args: { _hangout_id: string }
+        Returns: boolean
+      }
+      log_agent_message: {
+        Args: { _content: string; _data?: Json; _kind: string; _user: string }
+        Returns: string
+      }
       mark_curiosity_asked: {
         Args: { _id: string; _kind: string }
         Returns: undefined
       }
-      mark_goal_done: { Args: { _goal_id: string; _date?: string }; Returns: Json }
+      mark_goal_done: {
+        Args: { _date?: string; _goal_id: string }
+        Returns: Json
+      }
+      materialize_goal_plans: { Args: never; Returns: undefined }
+      materialize_routines: { Args: never; Returns: undefined }
       next_curiosity_item: {
         Args: never
         Returns: {
@@ -1465,14 +1559,20 @@ export type Database = {
             }
             Returns: string
           }
+      push_goal_pacing: { Args: never; Returns: undefined }
+      push_hangout_soon: { Args: never; Returns: undefined }
+      push_leave_by: { Args: never; Returns: undefined }
+      push_rsvp_nudges: { Args: never; Returns: undefined }
+      push_workout_start: { Args: never; Returns: undefined }
+      reconcile_health_workouts: { Args: { _max?: number }; Returns: Json }
       reject_change_set: { Args: { _id: string }; Returns: undefined }
       request_friendship_by_handle: {
         Args: { _handle: string }
         Returns: string
       }
-      reconcile_health_workouts: {
-        Args: { _max?: number }
-        Returns: Json
+      resolve_activity_check: {
+        Args: { _actual_label?: string; _id: string; _result: string }
+        Returns: undefined
       }
       respond_to_friendship: {
         Args: { _action: string; _other_user: string }
@@ -1482,6 +1582,8 @@ export type Database = {
         Args: { _hangout_id: string; _status: string }
         Returns: undefined
       }
+      run_morning_push: { Args: never; Returns: undefined }
+      send_due_reminders: { Args: never; Returns: undefined }
       send_push_to_users: {
         Args: {
           _body: string
@@ -1491,10 +1593,28 @@ export type Database = {
         }
         Returns: undefined
       }
-      set_friend_tier: { Args: { _other_user: string; _tier: string }; Returns: undefined }
+      set_friend_tier: {
+        Args: { _other_user: string; _tier: string }
+        Returns: undefined
+      }
       set_handle: { Args: { _handle: string }; Returns: undefined }
+      set_hangout_invite_policy: {
+        Args: { _hangout_id: string; _policy: string }
+        Returns: undefined
+      }
       set_push_token: { Args: { _token: string }; Returns: undefined }
       shares_group_with: { Args: { _other_user: string }; Returns: boolean }
+      try_proactive_push: {
+        Args: {
+          _body: string
+          _data?: Json
+          _dedupe: string
+          _kind: string
+          _title: string
+          _user: string
+        }
+        Returns: boolean
+      }
       unfriend: { Args: { _other_user: string }; Returns: undefined }
       update_hangout: {
         Args: {
