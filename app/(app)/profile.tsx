@@ -14,6 +14,7 @@ import {
 import { Swipeable } from 'react-native-gesture-handler';
 import { AddFriendModal } from '../../src/components/AddFriendModal';
 import { BehavioralProfile } from '../../src/components/BehavioralProfile';
+import { Collapsible } from '../../src/components/Collapsible';
 import { Button } from '../../src/components/Button';
 import { DeviceCalendarConnect } from '../../src/components/DeviceCalendarConnect';
 import { GoogleCalendarConnect } from '../../src/components/GoogleCalendarConnect';
@@ -29,13 +30,13 @@ import type { Goal, Interest } from '../../src/types/database';
 import { colors, font, radius, space } from '../../src/theme';
 
 /**
- * Profile / Settings tab. Three things:
+ * Profile / Settings tab. The identity card stays visible; everything else is
+ * a dropdown (closed by default, one-line summary in its header) so the tab
+ * reads as a short list of things you can open — not a wall to scroll.
  *
- *   1. Identity strip — name, email, edit name inline.
- *   2. "What I know about you" — a transparent dump of goals + interests
- *      so the user always sees what their agent has learned. This matters
- *      for the trust principle (#3 in the design philosophy).
- *   3. Settings — social openness + sign out.
+ * Goals merge the goals table with the agent's goal notes: one row per goal,
+ * showing only the latest note; earlier notes sit in a nested dropdown. The
+ * transparency is kept (trust principle #3), just not all on screen at once.
  */
 export default function ProfileScreen() {
   const { user, signOut } = useAuth();
@@ -98,17 +99,20 @@ export default function ProfileScreen() {
     [loadFacts],
   );
 
-  const deleteGoal = useCallback(
-    (ids: string[], title: string) => {
-      Alert.alert('Delete goal?', `"${title}" will be removed.`, [
+  const deleteGoalEverywhere = useCallback(
+    (g: GoalView) => {
+      Alert.alert('Remove goal?', `"${g.title}" and its notes will be removed.`, [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Delete',
+          text: 'Remove',
           style: 'destructive',
           onPress: async () => {
-            // Remove every stored version of this goal, not just the latest row.
-            const { error } = await supabase.from('goals').delete().in('id', ids);
-            if (error) Alert.alert('Failed', error.message);
+            const results = await Promise.all([
+              g.goalIds.length ? supabase.from('goals').delete().in('id', g.goalIds) : null,
+              g.noteIds.length ? supabase.from('interests').delete().in('id', g.noteIds) : null,
+            ]);
+            const err = results.find((r) => r?.error)?.error;
+            if (err) Alert.alert('Failed', err.message);
             else loadFacts();
           },
         },
@@ -120,7 +124,11 @@ export default function ProfileScreen() {
   // Collapse repeated goals into one row each (newest kept for display), but
   // keep every version's id + a last-changed timestamp so the history isn't
   // lost and the user can see when a goal shifted.
-  const goalRows = dedupeGoals(goals);
+  const goalRows = mergeGoals(dedupeGoals(goals), interests);
+  const prefGroups = groupInterests(interests.filter((i) => i.key !== 'goal_update'));
+  const prefCount = prefGroups.reduce((n, g) => n + g.items.length, 0);
+  const inbound = pending.filter((p) => !p.outbound).length;
+  const openness = OPENNESS_OPTIONS.find((o) => o.value === profile?.social_openness);
 
   const startEditName = () => {
     setNameDraft(profile?.first_name ?? '');
@@ -206,16 +214,16 @@ export default function ProfileScreen() {
           </View>
         </View>
 
-        {/* Friends */}
-        <Section title="Friends">
+        <Collapsible
+          title="Friends"
+          summary={friends.length === 0 ? 'No friends yet' : `${friends.length} friend${friends.length === 1 ? '' : 's'}`}
+          badge={inbound > 0 ? `${inbound} new` : undefined}
+          defaultOpen={inbound > 0}
+        >
           {pending.length > 0 ? (
             <View style={styles.pendingWrap}>
               <Text style={styles.subsectionLabel}>
-                {pending.filter((p) => !p.outbound).length > 0
-                  ? `${pending.filter((p) => !p.outbound).length} request${
-                      pending.filter((p) => !p.outbound).length === 1 ? '' : 's'
-                    } waiting`
-                  : 'Pending'}
+                {inbound > 0 ? `${inbound} request${inbound === 1 ? '' : 's'} waiting` : 'Pending'}
               </Text>
               <View style={{ gap: 6 }}>
                 {pending.map((p) => (
@@ -225,46 +233,105 @@ export default function ProfileScreen() {
             </View>
           ) : null}
 
-          <View style={{ gap: space.xs }}>
-            <Text style={styles.subsectionLabel}>Friends ({friends.length})</Text>
-            {friends.length === 0 ? (
-              <Text style={styles.emptyText}>
-                No friends yet. Add someone by their handle to get started.
-              </Text>
-            ) : (
-              friends.map((f) => (
-                <FriendRow key={f.id} friend={f} onUnfriended={refreshFriends} />
-              ))
-            )}
-          </View>
+          {friends.length === 0 ? (
+            <Text style={styles.emptyText}>
+              No friends yet. Add someone by their handle to get started.
+            </Text>
+          ) : (
+            friends.map((f) => (
+              <FriendRow key={f.id} friend={f} onUnfriended={refreshFriends} />
+            ))
+          )}
 
           <Button
             label="+ Add friend"
             variant="secondary"
             onPress={() => setShowAddFriend(true)}
-            style={{ marginTop: space.sm }}
+            style={{ marginTop: space.xs }}
           />
-        </Section>
+        </Collapsible>
 
-        {/* Calendar connections — phone calendar first: it's where most
-            people's real schedule lives, and needs no OAuth. */}
-        <Section title="Calendars">
+        {/* Phone calendar first: it's where most people's real schedule lives. */}
+        <Collapsible title="Calendars" summary="iPhone calendar · Google Calendar">
           <View style={{ gap: space.lg }}>
             <DeviceCalendarConnect />
             <GoogleCalendarConnect />
           </View>
-        </Section>
+        </Collapsible>
 
-        {/* Behavioral profile — what ALINE knows about you */}
-        <Section title="What ALINE knows about you">
+        <Collapsible
+          title="Goals"
+          summary={goalRows.length === 0 ? 'None yet' : goalRows.map((g) => g.title).join(' · ')}
+        >
+          {goalRows.length === 0 ? (
+            <Text style={styles.emptyText}>{loading ? 'Loading…' : 'None yet.'}</Text>
+          ) : (
+            goalRows.map((g) => (
+              <View key={g.key} style={styles.goalCard}>
+                <View style={styles.factRowWithAction}>
+                  <View style={{ flex: 1, gap: 2 }}>
+                    <Text style={styles.factPrimary}>{g.title}</Text>
+                    {g.latest ? <Text style={styles.goalNote}>{g.latest.text}</Text> : null}
+                    {g.when ? <Text style={styles.factMeta}>{g.when}</Text> : null}
+                  </View>
+                  <Pressable
+                    onPress={() => deleteGoalEverywhere(g)}
+                    hitSlop={10}
+                    style={styles.deleteBtn}
+                  >
+                    <Text style={styles.deleteBtnText}>✕</Text>
+                  </Pressable>
+                </View>
+                {g.earlier.length > 0 ? (
+                  <Collapsible variant="inline" title={`Earlier notes (${g.earlier.length})`}>
+                    {g.earlier.map((n) => (
+                      <Text key={n.id} style={styles.earlierNote}>
+                        {n.when} · {n.text}
+                      </Text>
+                    ))}
+                  </Collapsible>
+                ) : null}
+              </View>
+            ))
+          )}
+          <Text style={styles.subtleNote}>
+            Correct anything by telling ALINE — "I don't run anymore", "drop the
+            business goal".
+          </Text>
+        </Collapsible>
+
+        <Collapsible
+          title="Preferences"
+          summary={prefCount === 0 ? 'None yet' : prefGroups.map((g) => `${g.label} ${g.items.length}`).join(' · ')}
+        >
+          {prefGroups.length === 0 ? (
+            <Text style={styles.emptyText}>{loading ? 'Loading…' : 'None yet.'}</Text>
+          ) : (
+            prefGroups.map((group) => (
+              <Collapsible key={group.label} variant="inline" title={`${group.label} (${group.items.length})`}>
+                <View style={styles.prefChipWrap}>
+                  {group.items.map((item, idx) => (
+                    <Pressable
+                      key={idx}
+                      onPress={() => deletePreference(item.text, item.ids)}
+                      style={({ pressed }) => [styles.prefChip, pressed && { opacity: 0.6 }]}
+                    >
+                      <Text style={styles.prefChipText}>{item.text}</Text>
+                      <Text style={styles.prefChipX}>✕</Text>
+                    </Pressable>
+                  ))}
+                </View>
+              </Collapsible>
+            ))
+          )}
+        </Collapsible>
+
+        <Collapsible title="What ALINE knows about you" summary="Routines, places, sleep">
           <BehavioralProfile />
-        </Section>
+          <PipelineStatus />
+        </Collapsible>
 
-        {/* Pipeline sync status — replaces the old four manual debug buttons */}
-        <PipelineStatus />
-
-        {/* Social openness */}
-        <Section title="Social openness">
+        <Collapsible title="Social openness" summary={openness?.label ?? 'Not set'}>
           <View style={{ gap: space.sm }}>
             {OPENNESS_OPTIONS.map((opt) => {
               const active = profile?.social_openness === opt.value;
@@ -278,16 +345,9 @@ export default function ProfileScreen() {
                     pressed && { opacity: 0.85 },
                   ]}
                 >
-                  <View
-                    style={[styles.radio, active && styles.radioActive]}
-                  />
+                  <View style={[styles.radio, active && styles.radioActive]} />
                   <View style={{ flex: 1 }}>
-                    <Text
-                      style={[
-                        styles.opennessLabel,
-                        active && styles.opennessLabelActive,
-                      ]}
-                    >
+                    <Text style={[styles.opennessLabel, active && styles.opennessLabelActive]}>
                       {opt.label}
                     </Text>
                     <Text style={styles.opennessDesc}>{opt.description}</Text>
@@ -296,73 +356,9 @@ export default function ProfileScreen() {
               );
             })}
           </View>
-        </Section>
+        </Collapsible>
 
-        {/* What I know */}
-        <Section title="Goals & preferences">
-          <Text style={styles.subtleNote}>
-            Built from what you've told the agent. You can correct anything by
-            chatting with ALINE — "I don't actually run anymore", "drop the
-            morning thing".
-          </Text>
-
-          <Subsection label={`Goals (${goalRows.length})`}>
-            {goalRows.length === 0 ? (
-              <Text style={styles.emptyText}>None yet.</Text>
-            ) : (
-              goalRows.map(({ goal: g, ids, versions }) => {
-                const when = formatWhen(g.updated_at ?? g.created_at);
-                const meta = [when, versions > 1 ? `${versions} versions` : '']
-                  .filter(Boolean)
-                  .join(' · ');
-                return (
-                  <View key={g.id} style={[styles.factRow, styles.factRowWithAction]}>
-                    <View style={{ flex: 1, gap: 2 }}>
-                      <Text style={styles.factPrimary}>{g.title}</Text>
-                      {meta ? <Text style={styles.factMeta}>{meta}</Text> : null}
-                    </View>
-                    <Pressable
-                      onPress={() => deleteGoal(ids, g.title)}
-                      hitSlop={10}
-                      style={styles.deleteBtn}
-                    >
-                      <Text style={styles.deleteBtnText}>✕</Text>
-                    </Pressable>
-                  </View>
-                );
-              })
-            )}
-          </Subsection>
-
-          <Subsection label="Preferences">
-            {interests.length === 0 ? (
-              <Text style={styles.emptyText}>
-                {loading ? 'Loading…' : 'None yet.'}
-              </Text>
-            ) : (
-              groupInterests(interests).map((group) => (
-                <View key={group.label} style={styles.prefGroup}>
-                  <Text style={styles.prefGroupLabel}>{group.label}</Text>
-                  <View style={styles.prefChipWrap}>
-                    {group.items.map((item, idx) => (
-                      <Pressable
-                        key={idx}
-                        onPress={() => deletePreference(item.text, item.ids)}
-                        style={({ pressed }) => [styles.prefChip, pressed && { opacity: 0.6 }]}
-                      >
-                        <Text style={styles.prefChipText}>{item.text}</Text>
-                        <Text style={styles.prefChipX}>✕</Text>
-                      </Pressable>
-                    ))}
-                  </View>
-                </View>
-              ))
-            )}
-          </Subsection>
-        </Section>
-
-        {/* Danger zone */}
-        <Section title="Account">
+        <Collapsible title="Account" summary={user?.email ?? undefined}>
           <Button
             label="Sign out"
             variant="secondary"
@@ -370,7 +366,7 @@ export default function ProfileScreen() {
               await signOut();
             }}
           />
-        </Section>
+        </Collapsible>
 
         <Text style={styles.versionText}>ALINE MVP · alpha</Text>
       </ScrollView>
@@ -570,30 +566,6 @@ function PendingRequestRow({
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <View style={styles.section}>
-      <Text style={styles.sectionTitle}>{title}</Text>
-      {children}
-    </View>
-  );
-}
-
-function Subsection({
-  label,
-  children,
-}: {
-  label: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <View style={styles.subsection}>
-      <Text style={styles.subsectionLabel}>{label}</Text>
-      <View style={{ gap: 4 }}>{children}</View>
-    </View>
-  );
-}
-
 /** Collapse repeated goals (same title) into one display row.
  *  Goals arrive newest-first, so the first row seen for a title is the one we
  *  keep to display; the rest are folded in. We hold onto every version's id
@@ -614,6 +586,90 @@ function dedupeGoals(
     }
   }
   return [...byTitle.values()];
+}
+
+type GoalNote = { id: string; text: string; when: string };
+type GoalView = {
+  key: string;
+  title: string;
+  latest: GoalNote | null;
+  earlier: GoalNote[];
+  when: string;
+  goalIds: string[];
+  noteIds: string[];
+};
+
+/** One row per goal: the goals table merged with the agent's goal_update notes
+ *  (matched on the normalized goal name). Interests arrive newest-first, so the
+ *  first note per goal is the one shown; distinct older notes go to `earlier`,
+ *  exact repeats are dropped from view (their ids still delete with the goal). */
+function mergeGoals(
+  rows: { goal: Goal; ids: string[]; versions: number }[],
+  interests: Interest[],
+): GoalView[] {
+  const views = new Map<string, GoalView>();
+  for (const { goal, ids } of rows) {
+    const key = normGoal(goal.title);
+    views.set(key, {
+      key,
+      title: goal.title,
+      latest: null,
+      earlier: [],
+      when: formatWhen(goal.updated_at ?? goal.created_at),
+      goalIds: ids,
+      noteIds: [],
+    });
+  }
+  const seenText = new Map<string, Set<string>>();
+  for (const i of interests) {
+    if (i.key !== 'goal_update') continue;
+    const v = (i.value ?? {}) as Record<string, unknown>;
+    const name = typeof v.goal === 'string' ? v.goal : '';
+    if (!name) continue;
+    const key = normGoal(name);
+    let view = views.get(key);
+    if (!view) {
+      view = {
+        key,
+        title: name.charAt(0).toUpperCase() + name.slice(1),
+        latest: null,
+        earlier: [],
+        when: '',
+        goalIds: [],
+        noteIds: [],
+      };
+      views.set(key, view);
+    }
+    view.noteIds.push(i.id);
+    const text = goalNoteText(v);
+    if (!text) continue;
+    const seen = seenText.get(key) ?? new Set<string>();
+    seenText.set(key, seen);
+    if (seen.has(text)) continue;
+    seen.add(text);
+    const note = { id: i.id, text, when: formatWhen(i.updated_at ?? i.created_at) };
+    if (!view.latest) {
+      view.latest = note;
+      if (!view.when) view.when = note.when;
+    } else {
+      view.earlier.push(note);
+    }
+  }
+  return [...views.values()];
+}
+
+function normGoal(s: string): string {
+  return s.trim().toLowerCase();
+}
+
+/** Human line for a goal note: the context if there is one, else its plan. */
+function goalNoteText(v: Record<string, unknown>): string {
+  const str = (x: unknown) => (typeof x === 'string' ? x.trim() : '');
+  const context = str(v.context);
+  const plan = [str(v.frequency), str(v.duration)].filter(Boolean).join(' · ');
+  const text = context || plan;
+  if (!text) return '';
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 /** Compact "when" stamp — when ALINE last recorded or changed this goal. */
@@ -749,6 +805,14 @@ const styles = StyleSheet.create({
   },
   factPrimary: { color: colors.text, fontSize: 14, fontWeight: '600' },
   factMeta: { color: colors.textDim, fontSize: 11 },
+  goalCard: {
+    backgroundColor: colors.bg,
+    borderRadius: radius.md,
+    padding: space.md,
+    gap: 4,
+  },
+  goalNote: { color: colors.textMuted, fontSize: 13, lineHeight: 18 },
+  earlierNote: { color: colors.textMuted, fontSize: 12, lineHeight: 17 },
 
   prefGroup: { gap: 6 },
   prefGroupLabel: {
