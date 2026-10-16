@@ -155,3 +155,12 @@ export async function rejectRoutine(routineId: string): Promise<{ error?: string
     .eq('id', routineId);
   return error ? { error: error.message } : {};
 }
+
+/** "Yes, that's right" — the place is what ALINE thinks it is. */
+export async function confirmPlace(placeId: string): Promise<{ error?: string }> {
+  const { error } = await supabase
+    .from('places')
+    .update({ inference_status: 'confirmed', updated_at: new Date().toISOString() })
+    .eq('id', placeId);
+  return error ? { error: error.message } : {};
+}

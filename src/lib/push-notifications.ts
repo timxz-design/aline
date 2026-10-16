@@ -148,7 +148,7 @@ export function routeForNotification(data: Record<string, unknown> | undefined):
 
     case 'friend_request':
     case 'friend_accepted':
-      return '/(app)/profile';
+      return '/(app)/profile/friends';
 
     default:
       // Chat is home — anything unrecognized lands with the agent.

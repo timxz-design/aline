@@ -37,21 +37,26 @@ export type SocialOpenness = 'closed' | 'crew_only' | 'open';
 export const OPENNESS_OPTIONS: Array<{
   value: SocialOpenness;
   label: string;
+  /** Compact form for a settings row value. */
+  short: string;
   description: string;
 }> = [
   {
     value: 'closed',
     label: 'Just me right now',
+    short: 'Just me',
     description: "I'll add my own crew. Don't suggest anyone new.",
   },
   {
     value: 'crew_only',
     label: 'Coordinate with my crew',
+    short: 'My crew',
     description: 'Help me hang out with people I add. Suggestions later, not now.',
   },
   {
     value: 'open',
     label: 'Open to meeting people',
+    short: 'Open',
     description:
       'When ALINE finds compatible people in my circle, surface them.',
   },

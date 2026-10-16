@@ -9,7 +9,7 @@ import {
   useSpeechRecognitionEvent,
 } from 'expo-speech-recognition';
 import { decode as decodeBase64 } from 'base64-arraybuffer';
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -80,6 +80,11 @@ export default function AgentScreen() {
   }, [messages]);
   const visibleMessages = useMemo(() => messages.slice(sessionStartIdx), [messages, sessionStartIdx]);
   const earlierMessages = useMemo(() => messages.slice(0, sessionStartIdx), [messages, sessionStartIdx]);
+  // Rendered by an INVERTED FlatList (the standard chat pattern): offset 0 is
+  // the bottom, so the list rests on the newest message by itself. No more
+  // scrollToEnd on every content/layout change — that fought the user's finger
+  // (twitching) and landed short of the end when rows weren't measured yet.
+  const listData = useMemo(() => [...visibleMessages].reverse(), [visibleMessages]);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyDay, setHistoryDay] = useState<string | null>(null);
   const { byMessage: changeSetsByMessage } = useChangeSets();
@@ -89,6 +94,15 @@ export default function AgentScreen() {
     [messages],
   );
   const { byId: eventsById, goingMap, refresh: refreshEvents } = useLocalEvents(chatEventIds);
+  // Stable per-message event lists so memoised bubbles don't re-render on
+  // every keystroke in the composer.
+  const eventsByMessage = useMemo(() => {
+    const out: Record<string, LocalEvent[]> = {};
+    for (const m of messages) {
+      if (m.event_ids?.length) out[m.id] = m.event_ids.map((id) => eventsById[id]).filter(Boolean);
+    }
+    return out;
+  }, [messages, eventsById]);
   const [listening, setListening] = useState(false);
   const [viewerUri, setViewerUri] = useState<string | null>(null);
   // When the user spoke their message, speak the reply back (voice in → voice
@@ -99,9 +113,6 @@ export default function AgentScreen() {
   // voice "final" result slipped through and sent the message twice.
   const sendingRef = useRef(false);
   const lastSentRef = useRef<{ text: string; at: number } | null>(null);
-  // Only follow new content to the bottom when the user is already there, so
-  // reading older messages (or a card growing) never yanks the list around.
-  const nearBottomRef = useRef(true);
 
   // Initial history load. NEWEST 200 reversed for display — ascending+limit
   // returns the OLDEST rows, which silently freezes the chat once history
@@ -271,10 +282,11 @@ export default function AgentScreen() {
       return;
     }
     lastSentRef.current = { text: content, at: Date.now() };
-    nearBottomRef.current = true; // your own message always brings you down
     setMessages((prev) =>
       prev.some((m) => m.id === inserted.id) ? prev : [...prev, inserted]
     );
+    // Your own message always brings you down (offset 0 = bottom, inverted).
+    requestAnimationFrame(() => listRef.current?.scrollToOffset({ offset: 0, animated: true }));
 
     // 2) Ask the agent. The edge function inserts the reply server-side;
     //    realtime subscription will deliver it.
@@ -342,20 +354,6 @@ export default function AgentScreen() {
     });
   }, [listening]);
 
-  // Auto-scroll to bottom on new messages and after initial load — unless we
-  // have a pending notification focus to honor (handled by the effect below).
-  useEffect(() => {
-    const focusPending = !!focus && !focusHandledRef.current;
-    if (messages.length > 0 && !focusPending && nearBottomRef.current) {
-      // Double rAF ensures the list has finished layout before scrolling
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          listRef.current?.scrollToEnd({ animated: messages.length > 1 });
-        });
-      });
-    }
-  }, [messages.length, focus]);
-
   // Notification deep-link: scroll to the focused message and pulse a
   // highlight. Waits for the message to be present (it may arrive via realtime
   // a beat after navigation). Handled once per focus value.
@@ -370,16 +368,16 @@ export default function AgentScreen() {
       setHistoryOpen(true);
       return;
     }
-    const idx = fullIdx - sessionStartIdx;
+    // Index in the inverted list (newest first).
+    const idx = messages.length - 1 - fullIdx;
     focusHandledRef.current = true;
     setHighlightId(focus);
-    nearBottomRef.current = false; // we're deliberately looking at this message
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         try {
           listRef.current?.scrollToIndex({ index: idx, viewPosition: 0.5, animated: true });
         } catch {
-          listRef.current?.scrollToEnd({ animated: true });
+          // stay at the bottom
         }
       });
     });
@@ -409,7 +407,7 @@ export default function AgentScreen() {
             plan={item.goal_plan_id ? plansById[item.goal_plan_id] : undefined}
             highlighted={item.id === focus}
             // no onImagePress: iOS can't present the image viewer over this sheet
-            events={(item.event_ids ?? []).map((id) => eventsById[id]).filter(Boolean)}
+            events={eventsByMessage[item.id]}
             goingMap={goingMap}
             userId={user?.id ?? null}
             onEventChanged={refreshEvents}
@@ -469,7 +467,8 @@ export default function AgentScreen() {
         ) : (
           <FlatList
             ref={listRef}
-            data={visibleMessages}
+            inverted
+            data={listData}
             keyExtractor={(m) => m.id}
             contentContainerStyle={styles.messages}
             renderItem={({ item }) => (
@@ -478,29 +477,22 @@ export default function AgentScreen() {
                 changeSet={changeSetsByMessage[item.id]}
                 plan={item.goal_plan_id ? plansById[item.goal_plan_id] : undefined}
                 highlighted={item.id === highlightId}
-                onPromptDifferentTime={(s) => setDraft(s)}
+                onPromptDifferentTime={setDraft}
                 onImagePress={setViewerUri}
-                events={(item.event_ids ?? []).map((id) => eventsById[id]).filter(Boolean)}
+                events={eventsByMessage[item.id]}
                 goingMap={goingMap}
                 userId={user?.id ?? null}
                 onEventChanged={refreshEvents}
               />
             )}
-            ItemSeparatorComponent={() => <View style={{ height: space.sm }} />}
-            onScroll={(e) => {
-              const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
-              nearBottomRef.current =
-                contentSize.height - contentOffset.y - layoutMeasurement.height < 120;
-            }}
-            scrollEventThrottle={64}
-            onContentSizeChange={() => {
-              if (!highlightId && nearBottomRef.current) listRef.current?.scrollToEnd({ animated: false });
-            }}
-            onLayout={() => {
-              if (!highlightId && nearBottomRef.current) listRef.current?.scrollToEnd({ animated: false });
-            }}
-            onScrollToIndexFailed={() => {
-              listRef.current?.scrollToEnd({ animated: true });
+            ItemSeparatorComponent={Separator}
+            keyboardDismissMode="interactive"
+            keyboardShouldPersistTaps="handled"
+            // New messages keep you at the bottom when you're there; when you've
+            // scrolled up to read, they arrive without moving what you're reading.
+            maintainVisibleContentPosition={{ minIndexForVisible: 0, autoscrollToTopThreshold: 80 }}
+            onScrollToIndexFailed={(info) => {
+              listRef.current?.scrollToOffset({ offset: info.averageItemLength * info.index, animated: true });
             }}
           />
         )}
@@ -647,7 +639,11 @@ function renderRich(content: string, isUser: boolean): ReactNode[] {
   return nodes;
 }
 
-function Bubble({
+function Separator() {
+  return <View style={{ height: space.sm }} />;
+}
+
+const Bubble = memo(function Bubble({
   msg,
   changeSet,
   plan,
@@ -774,7 +770,7 @@ function Bubble({
       {planCard}
     </View>
   );
-}
+});
 
 function EmptyAgentState({ firstName }: { firstName: string | null }) {
   const greeting = firstName ? `Hey ${firstName}.` : 'Hey there.';
@@ -840,7 +836,8 @@ const styles = StyleSheet.create({
   planWrap: { marginTop: space.sm },
   kav: { flex: 1 },
   loadingBox: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  messages: { padding: space.lg, paddingBottom: space.xl },
+  // Inverted list: paddingTop renders at the visual bottom, above the composer.
+  messages: { padding: space.lg, paddingTop: space.xl },
   row: { flexDirection: 'row' },
   rowLeft: { justifyContent: 'flex-start' },
   rowRight: { justifyContent: 'flex-end' },

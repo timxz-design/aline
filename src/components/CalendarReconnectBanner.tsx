@@ -56,7 +56,7 @@ export function CalendarReconnectBanner({ onStatus }: Props) {
 
   const onTap = () => {
     breadcrumb('reconnect banner tapped');
-    router.push('/(app)/profile' as never);
+    router.push('/(app)/profile/calendars' as never);
   };
 
   // Deliberately quiet: a one-line muted note, not an alarm box. Sync being
