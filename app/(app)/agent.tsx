@@ -25,6 +25,7 @@ import {
   View,
 } from 'react-native';
 import { AgentChangeSetCard } from '../../src/components/AgentChangeSetCard';
+import { ChatHistorySheet } from '../../src/components/ChatHistorySheet';
 import { GoalPlanCard } from '../../src/components/GoalPlanCard';
 import { ImageViewer } from '../../src/components/ImageViewer';
 import { EventCard } from '../../src/components/EventCard';
@@ -69,18 +70,18 @@ export default function AgentScreen() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const listRef = useRef<FlatList<ChatMessage>>(null);
-  // A session is one local day: the chat opens on today's messages (empty on a
-  // new day), earlier days one tap away. The agent's context is the same day.
-  const [showEarlier, setShowEarlier] = useState(false);
+  // A session is one local day: the chat shows today only (empty on a new day).
+  // Earlier days live in the History sheet, grouped by date — never inline.
+  // The agent's context is the same day.
   const sessionStartIdx = useMemo(() => {
     const today = new Date().toDateString();
     const i = messages.findIndex((m) => new Date(m.created_at ?? 0).toDateString() === today);
     return i < 0 ? messages.length : i;
   }, [messages]);
-  const visibleMessages = useMemo(
-    () => (showEarlier ? messages : messages.slice(sessionStartIdx)),
-    [messages, sessionStartIdx, showEarlier],
-  );
+  const visibleMessages = useMemo(() => messages.slice(sessionStartIdx), [messages, sessionStartIdx]);
+  const earlierMessages = useMemo(() => messages.slice(0, sessionStartIdx), [messages, sessionStartIdx]);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyDay, setHistoryDay] = useState<string | null>(null);
   const { byMessage: changeSetsByMessage } = useChangeSets();
   const { byId: plansById } = useGoalPlans();
   const chatEventIds = useMemo(
@@ -362,11 +363,14 @@ export default function AgentScreen() {
     if (!focus || focusHandledRef.current) return;
     const fullIdx = messages.findIndex((m) => m.id === focus);
     if (fullIdx < 0) return; // not loaded yet — retry when messages update
-    if (!showEarlier && fullIdx < sessionStartIdx) {
-      setShowEarlier(true); // focused message is in an earlier session
-      return; // re-runs with the full list
+    if (fullIdx < sessionStartIdx) {
+      // Focused message is from an earlier day: open that day in History.
+      focusHandledRef.current = true;
+      setHistoryDay(new Date(messages[fullIdx].created_at ?? 0).toDateString());
+      setHistoryOpen(true);
+      return;
     }
-    const idx = showEarlier ? fullIdx : fullIdx - sessionStartIdx;
+    const idx = fullIdx - sessionStartIdx;
     focusHandledRef.current = true;
     setHighlightId(focus);
     nearBottomRef.current = false; // we're deliberately looking at this message
@@ -379,7 +383,7 @@ export default function AgentScreen() {
         }
       });
     });
-  }, [focus, messages, showEarlier, sessionStartIdx]);
+  }, [focus, messages, sessionStartIdx]);
 
   // Clear the highlight on its own timer. It used to live in the effect above,
   // whose cleanup ran on every new message — so replying within 2s left the
@@ -392,9 +396,41 @@ export default function AgentScreen() {
 
   return (
     <Screen noPadding>
+      <ChatHistorySheet
+        visible={historyOpen}
+        messages={earlierMessages}
+        openDayKey={historyDay}
+        onOpenDay={setHistoryDay}
+        onClose={() => setHistoryOpen(false)}
+        renderMessage={(item) => (
+          <Bubble
+            msg={item}
+            changeSet={changeSetsByMessage[item.id]}
+            plan={item.goal_plan_id ? plansById[item.goal_plan_id] : undefined}
+            highlighted={item.id === focus}
+            // no onImagePress: iOS can't present the image viewer over this sheet
+            events={(item.event_ids ?? []).map((id) => eventsById[id]).filter(Boolean)}
+            goingMap={goingMap}
+            userId={user?.id ?? null}
+            onEventChanged={refreshEvents}
+          />
+        )}
+      />
       <View style={styles.header}>
         <Text style={styles.title}>ALINE</Text>
         <View style={{ flexDirection: 'row', gap: space.xs }}>
+          <Pressable
+            onPress={() => {
+              setHistoryDay(null);
+              setHistoryOpen(true);
+            }}
+            hitSlop={10}
+            style={({ pressed }) => [styles.goalsBtn, styles.iconBtn, pressed && { opacity: 0.6 }]}
+            accessibilityRole="button"
+            accessibilityLabel="Past conversations"
+          >
+            <Ionicons name="time-outline" size={16} color={colors.accent} />
+          </Pressable>
           <Pressable
             onPress={() => router.push('/(app)/events')}
             hitSlop={10}
@@ -429,33 +465,12 @@ export default function AgentScreen() {
             <ActivityIndicator color={colors.accent} />
           </View>
         ) : visibleMessages.length === 0 ? (
-          <View style={{ flex: 1 }}>
-            <EmptyAgentState firstName={profile?.first_name ?? null} />
-            {messages.length > 0 ? (
-              <Pressable onPress={() => setShowEarlier(true)} hitSlop={8} style={styles.earlierBtn}>
-                <Text style={styles.earlierText}>Show earlier conversations</Text>
-              </Pressable>
-            ) : null}
-          </View>
+          <EmptyAgentState firstName={profile?.first_name ?? null} />
         ) : (
           <FlatList
             ref={listRef}
             data={visibleMessages}
             keyExtractor={(m) => m.id}
-            ListHeaderComponent={
-              !showEarlier && sessionStartIdx > 0 ? (
-                <Pressable
-                  onPress={() => {
-                    nearBottomRef.current = false; // stay where the user is reading
-                    setShowEarlier(true);
-                  }}
-                  hitSlop={8}
-                  style={styles.earlierBtn}
-                >
-                  <Text style={styles.earlierText}>Show earlier conversations</Text>
-                </Pressable>
-              ) : null
-            }
             contentContainerStyle={styles.messages}
             renderItem={({ item }) => (
               <Bubble
@@ -791,8 +806,7 @@ function SuggestionChip({ text }: { text: string }) {
 }
 
 const styles = StyleSheet.create({
-  earlierBtn: { alignSelf: 'center', paddingVertical: space.sm, paddingHorizontal: space.md, marginBottom: space.sm },
-  earlierText: { color: colors.accent, fontSize: 13, fontWeight: '600' },
+  iconBtn: { paddingHorizontal: 9 },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
