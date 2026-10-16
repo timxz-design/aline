@@ -237,10 +237,6 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-// Quiet time after which the chat counts as a new session (agent context and
-// the app's default view both start fresh). Keep in sync with the app.
-const SESSION_GAP_MS = 4 * 3600_000;
-
 // Place kinds the server logic understands (home/work drive schedules,
 // activity checks and free time). Set from meaning, so any language works.
 const PLACE_CATEGORIES = ['home', 'work', 'education', 'gym', 'food', 'social', 'shopping', 'outdoors', 'other'];
@@ -1901,20 +1897,19 @@ Deno.serve(async (req: Request) => {
     ((groupsRes.data as { groups: GroupRow }[] | null) ?? [])
       .map((m) => m.groups)
       .filter(Boolean);
-  // Only the CURRENT conversation: a session starts after 4h+ of quiet.
-  // Feeding yesterday's thread made the model mix days up ("you did it earlier
-  // today" about yesterday's session). Long-term memory (goals, preferences,
-  // places, plans) comes from the structured context, not old chat.
+  // A session is one LOCAL DAY: only today's messages go to the model.
+  // Feeding yesterday's thread made it mix days up ("you did it earlier today"
+  // about yesterday's session). Long-term memory (goals, preferences, places,
+  // plans) comes from the structured context, not old chat. The app shows the
+  // same day-based session.
   const allRecent: ChatRow[] = ((chatRes.data as ChatRow[] | null) ?? []).reverse();
-  let sessionStart = allRecent.length - 1;
-  while (
-    sessionStart > 0 &&
-    new Date(allRecent[sessionStart].created_at ?? 0).getTime() -
-      new Date(allRecent[sessionStart - 1].created_at ?? 0).getTime() < SESSION_GAP_MS
-  ) {
-    sessionStart--;
-  }
-  const recentChat: ChatRow[] = allRecent.slice(Math.max(0, sessionStart));
+  const sessionTz = (profileRes.data as { timezone?: string | null } | null)?.timezone || 'UTC';
+  const localDay = (iso: string | null) =>
+    new Date(iso ?? 0).toLocaleDateString('en-CA', { timeZone: sessionTz });
+  const today = localDay(new Date().toISOString());
+  const recentChat: ChatRow[] = allRecent.filter(
+    (m) => localDay(m.created_at) === today || m.id === body.user_message_id,
+  );
   const triggerMsg = triggerMsgRes.data as ChatRow | null;
   const behavioralSummary = (summaryRes.data as BehavioralSummaryRow | null) ?? null;
   const places: PlaceRow[] = (placesRes.data as PlaceRow[] | null) ?? [];

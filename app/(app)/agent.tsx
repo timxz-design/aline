@@ -69,24 +69,13 @@ export default function AgentScreen() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const listRef = useRef<FlatList<ChatMessage>>(null);
-  // A new session starts after 4h+ of quiet; the chat opens on the current one
-  // (older ones stay one tap away). Same gap the agent uses for its context.
+  // A session is one local day: the chat opens on today's messages (empty on a
+  // new day), earlier days one tap away. The agent's context is the same day.
   const [showEarlier, setShowEarlier] = useState(false);
   const sessionStartIdx = useMemo(() => {
-    let i = messages.length - 1;
-    while (
-      i > 0 &&
-      new Date(messages[i].created_at ?? 0).getTime() - new Date(messages[i - 1].created_at ?? 0).getTime() <
-        SESSION_GAP_MS
-    ) {
-      i--;
-    }
-    // Last message 4h+ ago: that session is over — open on a fresh, empty chat.
-    const last = messages[messages.length - 1];
-    if (last && Date.now() - new Date(last.created_at ?? 0).getTime() >= SESSION_GAP_MS) {
-      return messages.length;
-    }
-    return Math.max(0, i);
+    const today = new Date().toDateString();
+    const i = messages.findIndex((m) => new Date(m.created_at ?? 0).toDateString() === today);
+    return i < 0 ? messages.length : i;
   }, [messages]);
   const visibleMessages = useMemo(
     () => (showEarlier ? messages : messages.slice(sessionStartIdx)),
@@ -800,10 +789,6 @@ function SuggestionChip({ text }: { text: string }) {
     </View>
   );
 }
-
-// Quiet time after which the chat counts as a new session. Keep in sync with
-// SESSION_GAP_MS in supabase/functions/agent-respond.
-const SESSION_GAP_MS = 4 * 3600_000;
 
 const styles = StyleSheet.create({
   earlierBtn: { alignSelf: 'center', paddingVertical: space.sm, paddingHorizontal: space.md, marginBottom: space.sm },
