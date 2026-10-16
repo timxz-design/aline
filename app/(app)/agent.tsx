@@ -69,6 +69,29 @@ export default function AgentScreen() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const listRef = useRef<FlatList<ChatMessage>>(null);
+  // A new session starts after 4h+ of quiet; the chat opens on the current one
+  // (older ones stay one tap away). Same gap the agent uses for its context.
+  const [showEarlier, setShowEarlier] = useState(false);
+  const sessionStartIdx = useMemo(() => {
+    let i = messages.length - 1;
+    while (
+      i > 0 &&
+      new Date(messages[i].created_at ?? 0).getTime() - new Date(messages[i - 1].created_at ?? 0).getTime() <
+        SESSION_GAP_MS
+    ) {
+      i--;
+    }
+    // Last message 4h+ ago: that session is over — open on a fresh, empty chat.
+    const last = messages[messages.length - 1];
+    if (last && Date.now() - new Date(last.created_at ?? 0).getTime() >= SESSION_GAP_MS) {
+      return messages.length;
+    }
+    return Math.max(0, i);
+  }, [messages]);
+  const visibleMessages = useMemo(
+    () => (showEarlier ? messages : messages.slice(sessionStartIdx)),
+    [messages, sessionStartIdx, showEarlier],
+  );
   const { byMessage: changeSetsByMessage } = useChangeSets();
   const { byId: plansById } = useGoalPlans();
   const chatEventIds = useMemo(
@@ -348,8 +371,13 @@ export default function AgentScreen() {
   // a beat after navigation). Handled once per focus value.
   useEffect(() => {
     if (!focus || focusHandledRef.current) return;
-    const idx = messages.findIndex((m) => m.id === focus);
-    if (idx < 0) return; // not loaded yet — retry when messages update
+    const fullIdx = messages.findIndex((m) => m.id === focus);
+    if (fullIdx < 0) return; // not loaded yet — retry when messages update
+    if (!showEarlier && fullIdx < sessionStartIdx) {
+      setShowEarlier(true); // focused message is in an earlier session
+      return; // re-runs with the full list
+    }
+    const idx = showEarlier ? fullIdx : fullIdx - sessionStartIdx;
     focusHandledRef.current = true;
     setHighlightId(focus);
     nearBottomRef.current = false; // we're deliberately looking at this message
@@ -362,7 +390,7 @@ export default function AgentScreen() {
         }
       });
     });
-  }, [focus, messages]);
+  }, [focus, messages, showEarlier, sessionStartIdx]);
 
   // Clear the highlight on its own timer. It used to live in the effect above,
   // whose cleanup ran on every new message — so replying within 2s left the
@@ -411,13 +439,34 @@ export default function AgentScreen() {
           <View style={styles.loadingBox}>
             <ActivityIndicator color={colors.accent} />
           </View>
-        ) : messages.length === 0 ? (
-          <EmptyAgentState firstName={profile?.first_name ?? null} />
+        ) : visibleMessages.length === 0 ? (
+          <View style={{ flex: 1 }}>
+            <EmptyAgentState firstName={profile?.first_name ?? null} />
+            {messages.length > 0 ? (
+              <Pressable onPress={() => setShowEarlier(true)} hitSlop={8} style={styles.earlierBtn}>
+                <Text style={styles.earlierText}>Show earlier conversations</Text>
+              </Pressable>
+            ) : null}
+          </View>
         ) : (
           <FlatList
             ref={listRef}
-            data={messages}
+            data={visibleMessages}
             keyExtractor={(m) => m.id}
+            ListHeaderComponent={
+              !showEarlier && sessionStartIdx > 0 ? (
+                <Pressable
+                  onPress={() => {
+                    nearBottomRef.current = false; // stay where the user is reading
+                    setShowEarlier(true);
+                  }}
+                  hitSlop={8}
+                  style={styles.earlierBtn}
+                >
+                  <Text style={styles.earlierText}>Show earlier conversations</Text>
+                </Pressable>
+              ) : null
+            }
             contentContainerStyle={styles.messages}
             renderItem={({ item }) => (
               <Bubble
@@ -752,7 +801,13 @@ function SuggestionChip({ text }: { text: string }) {
   );
 }
 
+// Quiet time after which the chat counts as a new session. Keep in sync with
+// SESSION_GAP_MS in supabase/functions/agent-respond.
+const SESSION_GAP_MS = 4 * 3600_000;
+
 const styles = StyleSheet.create({
+  earlierBtn: { alignSelf: 'center', paddingVertical: space.sm, paddingHorizontal: space.md, marginBottom: space.sm },
+  earlierText: { color: colors.accent, fontSize: 13, fontWeight: '600' },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
