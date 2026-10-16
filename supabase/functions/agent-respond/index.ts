@@ -237,6 +237,10 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
+// Place kinds the server logic understands (home/work drive schedules,
+// activity checks and free time). Set from meaning, so any language works.
+const PLACE_CATEGORIES = ['home', 'work', 'education', 'gym', 'food', 'social', 'shopping', 'outdoors', 'other'];
+
 // ---------- tools ---------------------------------------------------------
 const TOOLS = [
   {
@@ -750,6 +754,12 @@ const TOOLS = [
         visit_id: { type: 'string', description: "The id from 'Your day as visits'." },
         activity: { type: 'string', description: "What they were doing, short, e.g. 'shopping', 'studying', 'dinner with Ana'." },
         place_label: { type: 'string', description: "Optional: what the place is, e.g. 'Spar', 'Ana's flat'. Saved for that place from now on." },
+        category: {
+          type: 'string',
+          enum: ['home', 'work', 'education', 'gym', 'food', 'social', 'shopping', 'outdoors', 'other'],
+          description:
+            "What KIND of place it is, from the meaning of their answer in any language ('my office' → work, 'moj dom' / 'Zuhause' → home, 'faks' → education). Set it whenever the answer implies one: schedules, activity checks and free-time logic rely on the category, not the name.",
+        },
       },
       required: ['visit_id'],
     },
@@ -791,6 +801,12 @@ const TOOLS = [
         place_id: { type: 'string', description: "The id from 'Open questions you asked'." },
         answer: { type: 'string', enum: ['confirm', 'relabel', 'not_a_place'] },
         label: { type: 'string', description: "Required for 'relabel'." },
+        category: {
+          type: 'string',
+          enum: ['home', 'work', 'education', 'gym', 'food', 'social', 'shopping', 'outdoors', 'other'],
+          description:
+            "What KIND of place it is, from the meaning of their answer in any language ('my office' → work, 'moj dom' / 'Zuhause' → home, 'faks' → education). Set it whenever the answer implies one: schedules, activity checks and free-time logic rely on the category, not the name.",
+        },
       },
       required: ['place_id', 'answer'],
     },
@@ -3832,8 +3848,9 @@ async function executeTool(
     const visitId = String(input.visit_id ?? '').trim();
     const activity = input.activity ? String(input.activity).trim() : '';
     const placeLabel = input.place_label ? String(input.place_label).trim() : '';
+    const placeCategory = PLACE_CATEGORIES.includes(String(input.category ?? '')) ? String(input.category) : null;
     if (!visitId) return { ok: false, message: 'visit_id is required' };
-    if (!activity && !placeLabel) return { ok: false, message: 'give an activity and/or a place_label' };
+    if (!activity && !placeLabel && !placeCategory) return { ok: false, message: 'give an activity, a place_label and/or a category' };
     const { data: visit, error: vErr } = await supabase
       .from('visits')
       .select('id, place_id')
@@ -3849,11 +3866,17 @@ async function executeTool(
         .eq('user_id', userId);
       if (error) return { ok: false, message: `Couldn't save it: ${error.message}` };
     }
-    if (placeLabel && visit.place_id) {
+    if ((placeLabel || placeCategory) && visit.place_id) {
       const now = new Date().toISOString();
       const { error } = await supabase
         .from('places')
-        .update({ user_label: placeLabel, inference_status: 'corrected', last_asked_at: now, updated_at: now })
+        .update({
+          ...(placeLabel ? { user_label: placeLabel } : {}),
+          ...(placeCategory ? { category: placeCategory } : {}),
+          inference_status: 'corrected',
+          last_asked_at: now,
+          updated_at: now,
+        })
         .eq('id', visit.place_id)
         .eq('user_id', userId);
       if (error) return { ok: false, message: `Couldn't save the place: ${error.message}` };
@@ -3899,6 +3922,7 @@ async function executeTool(
     const placeId = String(input.place_id ?? '').trim();
     const answer = String(input.answer ?? '');
     const label = input.label ? String(input.label).trim() : '';
+    const category = PLACE_CATEGORIES.includes(String(input.category ?? '')) ? String(input.category) : null;
     if (!placeId) return { ok: false, message: 'place_id is required' };
     const now = new Date().toISOString();
     let patch: Record<string, unknown>;
@@ -3908,6 +3932,7 @@ async function executeTool(
       patch = { user_label: label, inference_status: 'corrected' };
     } else if (answer === 'not_a_place') patch = { is_hidden: true, inference_status: 'corrected' };
     else return { ok: false, message: 'answer must be confirm, relabel or not_a_place' };
+    if (category && answer !== 'not_a_place') patch.category = category;
     const { error } = await supabase
       .from('places')
       .update({ ...patch, last_asked_at: now, updated_at: now })

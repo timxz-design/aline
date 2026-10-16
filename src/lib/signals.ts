@@ -49,6 +49,7 @@ export async function reportCollectionHealth(): Promise<void> {
   try {
     const uid = await userId();
     if (!uid) return;
+    await syncTimezone(uid);
 
     const [fg, bg, bgTask, locRunning, geoRunning, periodic, cal, motion, lastKnown, cursor, deviceId, wifiProbe, healthOn] =
       await Promise.all([
@@ -95,6 +96,22 @@ export async function reportCollectionHealth(): Promise<void> {
     });
   } catch (e) {
     console.warn('[ALINE signals] reportCollectionHealth failed:', e);
+  }
+}
+
+/**
+ * Keep profiles.timezone equal to the phone's timezone. Every server-side
+ * time (pushes, quiet hours, "yesterday", activity checks, visits) is computed
+ * in it; new accounts used to get a fixed 'Europe/Ljubljana' default and
+ * nothing ever corrected it — wrong for anyone elsewhere or travelling.
+ */
+async function syncTimezone(uid: string): Promise<void> {
+  try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (!tz) return;
+    await supabase.from('profiles').update({ timezone: tz }).eq('id', uid).neq('timezone', tz);
+  } catch (e) {
+    console.warn('[ALINE signals] timezone sync failed:', e);
   }
 }
 
