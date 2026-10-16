@@ -20,7 +20,6 @@ import { OPENNESS_OPTIONS } from '../../../src/lib/onboarding-data';
 import { readPermissionStates, type PermissionKey, type PermissionState } from '../../../src/lib/permission-status';
 import { registerForPushNotifications } from '../../../src/lib/push-notifications';
 import { confirmPlace, useBehavioralProfile, type Place } from '../../../src/lib/use-behavioral-profile';
-import { useFriends } from '../../../src/lib/use-friends';
 import { useProfile } from '../../../src/lib/use-profile';
 import { useYouFacts } from '../../../src/lib/use-you-facts';
 import { colors, font, radius, space } from '../../../src/theme';
@@ -35,7 +34,6 @@ export default function YouScreen() {
   const router = useRouter();
   const { user } = useAuth();
   const { profile } = useProfile();
-  const { friends, pending } = useFriends();
   const { places, routines, summary, refresh: refreshKnowledge } = useBehavioralProfile();
   const { goalRows, prefGroups } = useYouFacts();
 
@@ -70,7 +68,6 @@ export default function YouScreen() {
   const confirmedPlaces = visiblePlaces.filter(isPlaceConfirmed);
   const routineGroups = useMemo(() => groupRoutines(routines.filter(isDisplayRoutine)), [routines]);
   const prefCount = prefGroups.reduce((n, g) => n + g.items.length, 0);
-  const inbound = pending.filter((p) => !p.outbound).length;
   const openness = OPENNESS_OPTIONS.find((o) => o.value === profile?.social_openness);
 
   const placesValue =
@@ -191,15 +188,7 @@ export default function YouScreen() {
           />
         </Group>
 
-        <Group label="People">
-          <Row
-            icon="people"
-            iconColor={colors.accent}
-            title="Friends"
-            badge={inbound || undefined}
-            value={String(friends.length)}
-            onPress={() => go('friends')}
-          />
+        <Group label="Sharing">
           <Row
             icon="lock-closed"
             iconColor="#8E5BA8"

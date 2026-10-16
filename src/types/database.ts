@@ -1464,6 +1464,15 @@ export type Database = {
           last_synced_at: string
         }[]
       }
+      people_together_summary: {
+        Args: never
+        Returns: {
+          last_met: string | null
+          next_plan_at: string | null
+          other_user_id: string
+          times_met: number
+        }[]
+      }
       hangout_invite_candidates: {
         Args: { _hangout_id: string }
         Returns: {

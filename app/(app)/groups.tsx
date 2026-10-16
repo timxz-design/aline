@@ -1,4 +1,4 @@
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
@@ -12,6 +12,7 @@ import {
   View,
 } from 'react-native';
 import { Swipeable } from 'react-native-gesture-handler';
+import { FriendsList } from '../../src/components/FriendsList';
 import { HangoutSheet } from '../../src/components/HangoutSheet';
 import { PersonAvatar } from '../../src/components/PersonAvatar';
 import { AddMembersModal } from '../../src/components/AddMembersModal';
@@ -19,6 +20,7 @@ import { Button } from '../../src/components/Button';
 import { Input } from '../../src/components/Input';
 import { Screen } from '../../src/components/Screen';
 import { useAuth } from '../../src/lib/auth-context';
+import { useFriends } from '../../src/lib/use-friends';
 import { supabase } from '../../src/lib/supabase';
 import type { Hangout, HangoutResponse } from '../../src/types/database';
 import { colors, font, radius, space } from '../../src/theme';
@@ -45,8 +47,21 @@ type GroupRow = {
   muted_until: string | null;
 };
 
-export default function GroupsScreen() {
+/**
+ * People tab: everyone you coordinate with, in two views — Groups (with their
+ * plans) and Friends (connection type, when you last met). Not everyone here
+ * is a friend, hence "People".
+ */
+export default function PeopleScreen() {
   const { user } = useAuth();
+  const { tab } = useLocalSearchParams<{ tab?: string }>();
+  const [view, setView] = useState<'groups' | 'friends'>(tab === 'friends' ? 'friends' : 'groups');
+  useEffect(() => {
+    if (tab === 'friends' || tab === 'groups') setView(tab);
+  }, [tab]);
+  const [addFriendOpen, setAddFriendOpen] = useState(false);
+  const { pending } = useFriends();
+  const inbound = pending.filter((p) => !p.outbound).length;
   const [groups, setGroups] = useState<GroupRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
@@ -227,16 +242,40 @@ export default function GroupsScreen() {
   return (
     <Screen noPadding>
       <View style={styles.header}>
-        <Text style={styles.title}>Groups</Text>
+        <Text style={styles.title}>People</Text>
         <Pressable
-          onPress={() => setShowCreate(true)}
+          onPress={() => (view === 'groups' ? setShowCreate(true) : setAddFriendOpen(true))}
           style={({ pressed }) => [styles.addBtn, pressed && { opacity: 0.7 }]}
           hitSlop={10}
         >
-          <Text style={styles.addBtnText}>+ New</Text>
+          <Text style={styles.addBtnText}>{view === 'groups' ? '+ New group' : '+ Add friend'}</Text>
         </Pressable>
       </View>
 
+      <View style={styles.segment}>
+        {(['groups', 'friends'] as const).map((v) => (
+          <Pressable
+            key={v}
+            onPress={() => setView(v)}
+            style={[styles.segmentBtn, view === v && styles.segmentBtnActive]}
+            accessibilityRole="tab"
+            accessibilityState={{ selected: view === v }}
+          >
+            <Text style={[styles.segmentText, view === v && styles.segmentTextActive]}>
+              {v === 'groups' ? 'Groups' : 'Friends'}
+            </Text>
+            {v === 'friends' && inbound > 0 ? (
+              <View style={styles.segmentBadge}>
+                <Text style={styles.segmentBadgeText}>{inbound}</Text>
+              </View>
+            ) : null}
+          </Pressable>
+        ))}
+      </View>
+
+      {view === 'friends' ? (
+        <FriendsList addOpen={addFriendOpen} onCloseAdd={() => setAddFriendOpen(false)} onOpenAdd={() => setAddFriendOpen(true)} />
+      ) : (
       <FlatList
         data={groups}
         keyExtractor={(g) => g.id}
@@ -268,6 +307,7 @@ export default function GroupsScreen() {
         refreshing={loading}
         onRefresh={loadGroups}
       />
+      )}
 
       <CreateGroupModal
         visible={showCreate}
@@ -797,6 +837,36 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
   },
   addBtnText: { color: colors.accent, fontWeight: '600', fontSize: 13 },
+  segment: {
+    flexDirection: 'row',
+    marginHorizontal: space.lg,
+    marginBottom: space.xs,
+    padding: 3,
+    borderRadius: radius.md,
+    backgroundColor: colors.bgRaised,
+  },
+  segmentBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 7,
+    borderRadius: radius.sm,
+  },
+  segmentBtnActive: { backgroundColor: colors.bgElevated },
+  segmentText: { color: colors.textMuted, fontSize: 14, fontWeight: '600' },
+  segmentTextActive: { color: colors.text },
+  segmentBadge: {
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    paddingHorizontal: 5,
+    backgroundColor: colors.accent,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  segmentBadgeText: { color: colors.textInverse, fontSize: 11, fontWeight: '700' },
   listBody: {
     padding: space.lg,
     gap: space.md,

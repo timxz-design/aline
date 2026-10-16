@@ -1,53 +1,45 @@
+/**
+ * Rows for the People tab's Friends list: a friend (connection type + when you
+ * last met or next meet; star = inner circle; swipe left to unfriend) and a
+ * pending request (accept / decline, or cancel one you sent).
+ */
+
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useRef, useState } from 'react';
 import { Alert, Animated, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Swipeable } from 'react-native-gesture-handler';
-import { AddFriendModal } from '../../../src/components/AddFriendModal';
-import { PersonAvatar } from '../../../src/components/PersonAvatar';
-import { DetailScreen, EmptyRow, Group, Row } from '../../../src/components/settings-ui';
-import { supabase } from '../../../src/lib/supabase';
-import { setFriendTier, useFriends, type FriendProfile, type PendingRequest } from '../../../src/lib/use-friends';
-import { colors, font, radius, space } from '../../../src/theme';
+import { supabase } from '../lib/supabase';
+import { setFriendTier, type FriendProfile, type PendingRequest } from '../lib/use-friends';
+import { colors, font, radius, space } from '../theme';
+import { PersonAvatar } from './PersonAvatar';
 
-export default function FriendsScreen() {
-  const { friends, pending, refresh } = useFriends();
-  const [showAdd, setShowAdd] = useState(false);
-  const inbound = pending.filter((p) => !p.outbound);
-  const outbound = pending.filter((p) => p.outbound);
+export type Together = { last_met: string | null; times_met: number; next_plan_at: string | null };
 
-  return (
-    <DetailScreen title="Friends" subtitle="Star someone to add them to your inner circle — they see your full schedule, not just free/busy.">
-      <Group label={inbound.length ? 'Waiting for you' : undefined}>
-        {inbound.map((p) => (
-          <RequestRow key={p.user.id} req={p} onActed={refresh} />
-        ))}
-      </Group>
-
-      <Group label="Your friends" footer={friends.length ? 'Swipe left on someone to unfriend.' : undefined}>
-        {friends.length ? (
-          friends.map((f) => <FriendRow key={f.id} friend={f} onChanged={refresh} />)
-        ) : (
-          <EmptyRow text="No friends yet. Add someone by their handle." />
-        )}
-      </Group>
-
-      <Group label={outbound.length ? 'Sent' : undefined}>
-        {outbound.map((p) => (
-          <RequestRow key={p.user.id} req={p} onActed={refresh} />
-        ))}
-      </Group>
-
-      <Group>
-        <Row icon="person-add" iconColor={colors.accent} title="Add friend" onPress={() => setShowAdd(true)} />
-      </Group>
-
-      <AddFriendModal visible={showAdd} onClose={() => setShowAdd(false)} onSuccess={refresh} />
-    </DetailScreen>
-  );
+/** "met 3 days ago", "next plan Fri", "no plans together yet". */
+export function togetherLine(t: Together | undefined): string {
+  if (t?.next_plan_at) {
+    const d = new Date(t.next_plan_at);
+    const days = Math.round((d.getTime() - Date.now()) / 86_400_000);
+    return `next plan ${days < 7 ? d.toLocaleDateString(undefined, { weekday: 'short' }) : d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}`;
+  }
+  if (t?.last_met) {
+    const days = Math.floor((Date.now() - new Date(t.last_met).getTime()) / 86_400_000);
+    const ago = days <= 0 ? 'today' : days === 1 ? 'yesterday' : days < 14 ? `${days} days ago` : days < 60 ? `${Math.round(days / 7)} weeks ago` : `${Math.round(days / 30)} months ago`;
+    return `met ${ago}`;
+  }
+  return 'no plans together yet';
 }
 
-function FriendRow({ friend, onChanged }: { friend: FriendProfile; onChanged: () => void }) {
+export function FriendRow({
+  friend,
+  together,
+  onChanged,
+}: {
+  friend: FriendProfile;
+  together?: Together;
+  onChanged: () => void;
+}) {
   const swipeRef = useRef<Swipeable>(null);
   const label = friend.first_name ?? friend.display_name ?? friend.handle ?? 'this friend';
   const inner = friend.myTier === 'inner';
@@ -83,9 +75,8 @@ function FriendRow({ friend, onChanged }: { friend: FriendProfile; onChanged: ()
         <PersonAvatar id={friend.id} name={friend.first_name ?? friend.handle} />
         <View style={{ flex: 1 }}>
           <Text style={styles.name}>{friend.first_name ?? friend.display_name ?? 'Unnamed'}</Text>
-          <Text style={styles.meta}>
-            {friend.handle ? `@${friend.handle}` : ''}
-            {inner ? `${friend.handle ? ' · ' : ''}inner circle` : ''}
+          <Text style={styles.meta} numberOfLines={1}>
+            {inner ? 'Inner circle' : 'Friend'} · {togetherLine(together)}
           </Text>
         </View>
         <Pressable
@@ -105,7 +96,7 @@ function FriendRow({ friend, onChanged }: { friend: FriendProfile; onChanged: ()
   );
 }
 
-function RequestRow({ req, onActed }: { req: PendingRequest; onActed: () => void }) {
+export function RequestRow({ req, onActed }: { req: PendingRequest; onActed: () => void }) {
   const [busy, setBusy] = useState(false);
   const act = async (fn: () => PromiseLike<{ error: { message: string } | null }>) => {
     setBusy(true);
