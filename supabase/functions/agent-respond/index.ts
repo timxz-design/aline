@@ -741,6 +741,20 @@ const TOOLS = [
     },
   },
   {
+    name: 'correct_visit',
+    description:
+      "Correct what ALINE recorded for one of the user's stays (see 'Your day as visits'): what they were doing there and/or what the place is. Use when they tell you (\"that was the shop, not the gym\", \"I was at Ana's\", \"I was studying, not working\"). Their correction is final and never overwritten by later guesses.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        visit_id: { type: 'string', description: "The id from 'Your day as visits'." },
+        activity: { type: 'string', description: "What they were doing, short, e.g. 'shopping', 'studying', 'dinner with Ana'." },
+        place_label: { type: 'string', description: "Optional: what the place is, e.g. 'Spar', 'Ana's flat'. Saved for that place from now on." },
+      },
+      required: ['visit_id'],
+    },
+  },
+  {
     name: 'answer_schedule_suggestion',
     description:
       "Record the user's answer to a plan change YOU suggested in chat (\"Your last 3 strength sessions were around 14:00, not 17:00 — move future sessions to 14:00–15:00?\"), listed under 'Open questions you asked'. accept=true re-times the plan and moves its future sessions; accept=false keeps the plan (not re-suggested for 30 days). If they want a DIFFERENT time than suggested, decline this and use the goal-plan tools instead.",
@@ -2008,7 +2022,7 @@ Deno.serve(async (req: Request) => {
   // that the user hasn't answered yet — so a reply like "yep" or "no, that's my
   // office" can be recorded against the right item.
   const askedSince = new Date(Date.now() - 3 * 86_400_000).toISOString();
-  const [openChecksRes, openPlacesRes, openRoutinesRes, openSuggestionsRes, durationsRes] = await Promise.all([
+  const [openChecksRes, openPlacesRes, openRoutinesRes, openSuggestionsRes, durationsRes, visitsRes] = await Promise.all([
     supabase
       .from('activity_log')
       .select('id, scheduled_start, calendar_events(title)')
@@ -2045,6 +2059,14 @@ Deno.serve(async (req: Request) => {
       .gte('started_at', '2026-10-15T00:00:00Z')
       .order('started_at', { ascending: false })
       .limit(60),
+    // The user's day as stays + travel (built from location every 10 min).
+    supabase
+      .from('visits')
+      .select('id, kind, arrived_at, left_at, is_open, activity, activity_source, travel_mode, places(name, user_label, category)')
+      .eq('user_id', userId)
+      .gte('left_at', new Date(Date.now() - 24 * 3600_000).toISOString())
+      .order('arrived_at', { ascending: true })
+      .limit(40),
   ]);
   const tz = profile.timezone ?? 'Europe/Ljubljana';
   const hm = (m: number | null) =>
@@ -2101,6 +2123,30 @@ Deno.serve(async (req: Request) => {
       const sorted = [...l].sort((a, b) => a - b);
       return `  - ${t}: usually ~${Math.round(sorted[Math.floor(sorted.length / 2)])} min (from ${l.length} measured sessions)`;
     });
+  const vt = (iso: string) =>
+    new Date(iso).toLocaleTimeString('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false });
+  const visitLines = ((visitsRes.data ?? []) as unknown as {
+    id: string;
+    kind: string;
+    arrived_at: string;
+    left_at: string;
+    is_open: boolean;
+    activity: string | null;
+    activity_source: string | null;
+    travel_mode: string | null;
+    places: { name: string | null; user_label: string | null; category: string | null } | null;
+  }[]).map((v) => {
+    if (v.kind === 'travel') return `  - ${vt(v.arrived_at)}–${vt(v.left_at)} travelling${v.travel_mode && v.travel_mode !== 'unknown' ? ` (${v.travel_mode})` : ''}`;
+    const place = v.places?.user_label || v.places?.name || v.places?.category || 'an unnamed spot';
+    const until = v.is_open ? 'now (still there)' : vt(v.left_at);
+    const what = v.activity
+      ? `${v.activity} (${v.activity_source === 'user' ? 'confirmed by them' : v.activity_source === 'healthkit' ? 'measured' : 'guess from ' + v.activity_source})`
+      : 'activity unknown';
+    return `  - ${vt(v.arrived_at)}–${until} at ${place}: ${what} · visit id ${v.id}`;
+  });
+  const visitsBlock = visitLines.length
+    ? `Their day as visits (last 24h, from location; times are when they arrived/left). Use this for "when did I leave/arrive", "how long was I at…", and to know where they are now. Guesses can be wrong — correct them with correct_visit when the user tells you:\n${visitLines.join('\n')}`
+    : '';
   const durationsBlock = durationLines.length
     ? `Learned activity lengths (measured). When you create or move a block for one of these, use this length rather than a guess:\n${durationLines.join('\n')}`
     : '';
@@ -2113,7 +2159,7 @@ Deno.serve(async (req: Request) => {
     },
     {
       type: 'text' as const,
-      text: [dynamicBlock, openQuestionsBlock, durationsBlock].filter(Boolean).join('\n\n'),
+      text: [dynamicBlock, visitsBlock, openQuestionsBlock, durationsBlock].filter(Boolean).join('\n\n'),
     },
   ];
 
@@ -3779,6 +3825,42 @@ async function executeTool(
           skipped ? `, skipped ${skipped} that clashed with existing plans` : ''
         }. The plan is now LIVE. Tell the user what landed${skipped ? ' and what was skipped' : ''}.`,
       }),
+    };
+  }
+
+  if (name === 'correct_visit') {
+    const visitId = String(input.visit_id ?? '').trim();
+    const activity = input.activity ? String(input.activity).trim() : '';
+    const placeLabel = input.place_label ? String(input.place_label).trim() : '';
+    if (!visitId) return { ok: false, message: 'visit_id is required' };
+    if (!activity && !placeLabel) return { ok: false, message: 'give an activity and/or a place_label' };
+    const { data: visit, error: vErr } = await supabase
+      .from('visits')
+      .select('id, place_id')
+      .eq('id', visitId)
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (vErr || !visit) return { ok: false, message: 'visit not found' };
+    if (activity) {
+      const { error } = await supabase
+        .from('visits')
+        .update({ activity, activity_source: 'user', activity_confidence: 1, updated_at: new Date().toISOString() })
+        .eq('id', visitId)
+        .eq('user_id', userId);
+      if (error) return { ok: false, message: `Couldn't save it: ${error.message}` };
+    }
+    if (placeLabel && visit.place_id) {
+      const now = new Date().toISOString();
+      const { error } = await supabase
+        .from('places')
+        .update({ user_label: placeLabel, inference_status: 'corrected', last_asked_at: now, updated_at: now })
+        .eq('id', visit.place_id)
+        .eq('user_id', userId);
+      if (error) return { ok: false, message: `Couldn't save the place: ${error.message}` };
+    }
+    return {
+      ok: true,
+      message: `Saved${activity ? ` — doing: ${activity}` : ''}${placeLabel ? `${activity ? ';' : ' —'} place: ${placeLabel}` : ''}.${placeLabel && !visit.place_id ? ' (That spot is not a known place yet, so only the activity was saved.)' : ''}`,
     };
   }
 
