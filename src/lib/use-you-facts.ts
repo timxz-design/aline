@@ -180,37 +180,80 @@ const INTEREST_GROUPS: Record<string, string> = {
 };
 const GROUP_ORDER = Object.values(INTEREST_GROUPS);
 
-/** Group raw interests into human sections, prettified + deduped.
- *  Each chip keeps the ids of ALL rows it represents so delete removes them all. */
-export function groupInterests(
-  interests: Interest[],
-): { label: string; items: { text: string; ids: string[] }[] }[] {
-  const byLabel = new Map<string, Map<string, string[]>>();
+export type PrefItem = {
+  /** The thing itself: "Football", "Evening (8pm)". */
+  text: string;
+  /** Why / how, from the agent's notes: "both playing and watching". */
+  detail: string | null;
+  /** Every row this item stands for, so "forget" removes them all. */
+  ids: string[];
+  /** Newest of those rows (ISO). */
+  updatedAt: string;
+};
+
+/** Group raw interests into human sections. Entries about the same thing
+ *  ("football" and "football — both playing and watching") merge into one
+ *  item; the newest non-empty detail is shown. */
+export function groupInterests(interests: Interest[]): { label: string; items: PrefItem[] }[] {
+  const byLabel = new Map<string, Map<string, PrefItem>>();
   for (const i of interests) {
     const label = INTEREST_GROUPS[i.key] ?? 'Other';
-    const raw = formatInterest(i).trim();
-    if (!raw) continue;
-    const text = raw.charAt(0).toUpperCase() + raw.slice(1);
-    if (!byLabel.has(label)) byLabel.set(label, new Map());
-    const items = byLabel.get(label)!;
-    items.set(text, [...(items.get(text) ?? []), i.id]);
+    const { title, detail } = describeInterest(i.value as unknown);
+    if (!title) continue;
+    const key = title.toLowerCase();
+    const items = byLabel.get(label) ?? new Map<string, PrefItem>();
+    byLabel.set(label, items);
+    const updatedAt = i.updated_at ?? i.created_at ?? '';
+    const existing = items.get(key);
+    if (existing) {
+      existing.ids.push(i.id);
+      // Interests arrive newest-first: keep the first detail seen, fill gaps.
+      if (!existing.detail && detail) existing.detail = detail;
+      if (updatedAt > existing.updatedAt) existing.updatedAt = updatedAt;
+    } else {
+      items.set(key, { text: cap(title), detail: detail ? cap(detail) : null, ids: [i.id], updatedAt });
+    }
   }
   return GROUP_ORDER.filter((l) => byLabel.has(l)).map((label) => ({
     label,
-    items: [...byLabel.get(label)!.entries()].map(([text, ids]) => ({ text, ids })),
+    items: [...byLabel.get(label)!.values()],
   }));
 }
 
-function formatInterest(i: Interest): string {
-  // Best-effort prettify of the JSONB value.
-  const v = i.value as unknown;
-  if (typeof v === 'string') return v;
-  if (v && typeof v === 'object') {
-    const obj = v as Record<string, unknown>;
-    if (typeof obj.label === 'string') return obj.label;
-    return Object.entries(obj)
-      .map(([k, val]) => `${k}: ${typeof val === 'string' ? val : JSON.stringify(val)}`)
-      .join(' · ');
+function cap(s: string): string {
+  const t = s.trim();
+  return t.charAt(0).toUpperCase() + t.slice(1);
+}
+
+/** Turn the agent's JSON note into a title + one detail line — never raw
+ *  "key: value" pairs. Known shapes first, then a generic fallback. */
+function describeInterest(v: unknown): { title: string; detail: string | null } {
+  const str = (x: unknown) => (typeof x === 'string' && x.trim() ? x.trim() : null);
+  if (typeof v === 'string') return { title: v.trim(), detail: null };
+  if (!v || typeof v !== 'object') return { title: '', detail: null };
+  const o = v as Record<string, unknown>;
+
+  // Onboarding picks: { label, blurb, icon }
+  if (str(o.label)) return { title: str(o.label)!, detail: str(o.blurb) };
+  // Likes / dislikes: { activity, context | reason }
+  if (str(o.activity)) return { title: str(o.activity)!, detail: str(o.context) ?? str(o.reason) };
+  // Time preferences: { time, context }
+  if (str(o.time)) return { title: str(o.time)!, detail: str(o.context) };
+  // Venue preferences: { context: "dinner", max_drive_time, price_preference }
+  if (str(o.max_drive_time) || str(o.price_preference)) {
+    const parts = [
+      str(o.max_drive_time) ? `within ${str(o.max_drive_time)}` : null,
+      str(o.price_preference),
+    ].filter(Boolean);
+    return { title: str(o.context) ?? str(o.venue) ?? 'Places to go', detail: parts.join(' · ') || null };
   }
-  return JSON.stringify(v);
+  // Habits / other notes: { detail, type }
+  if (str(o.detail)) return { title: str(o.detail)!, detail: null };
+
+  // Fallback: first text value is the title, the next one the detail.
+  const texts = Object.entries(o)
+    .filter(([k]) => k !== 'icon' && k !== 'type')
+    .map(([, x]) => str(x))
+    .filter((x): x is string => !!x);
+  return { title: texts[0] ?? '', detail: texts[1] ?? null };
 }

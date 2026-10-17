@@ -83,6 +83,7 @@ export function Row({
   onPress,
   chevron = !!onPress,
   right,
+  titleLines = 1,
 }: {
   icon?: IconName;
   iconColor?: string;
@@ -94,6 +95,7 @@ export function Row({
   onPress?: () => void;
   chevron?: boolean;
   right?: ReactNode;
+  titleLines?: number;
 }) {
   return (
     <Pressable
@@ -108,7 +110,7 @@ export function Row({
         </View>
       ) : null}
       <View style={{ flex: 1, gap: 1 }}>
-        <Text style={styles.rowTitle} numberOfLines={1}>
+        <Text style={styles.rowTitle} numberOfLines={titleLines}>
           {title}
         </Text>
         {subtitle ? (

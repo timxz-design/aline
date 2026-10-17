@@ -86,7 +86,12 @@ export default function YouScreen() {
     .filter((p) => !isPlaceConfirmed(p) && p.visit_count >= 2)
     .sort((a, b) => b.last_seen.localeCompare(a.last_seen))[0];
   const topRoutine = routineGroups.find((g) => g.days.length >= 2);
-  const like = prefGroups.find((g) => g.label === 'Likes')?.items[0]?.text;
+  // Only things learned in the last two weeks count as "recently learned".
+  const recentCutoff = new Date(Date.now() - 14 * 86_400_000).toISOString();
+  const like = prefGroups
+    .find((g) => g.label === 'Likes')
+    ?.items.filter((i) => i.updatedAt >= recentCutoff)
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0]?.text;
   const tiles: TileData[] = [];
   if (pendingPlace) {
     tiles.push({

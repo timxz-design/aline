@@ -33,7 +33,7 @@ export default function PreferencesScreen() {
         prefGroups.map((g) => (
           <Group key={g.label} label={g.label}>
             {g.items.map((item) => (
-              <Row key={item.text} title={item.text} onPress={() => forget(item.text, item.ids)} chevron={false} />
+              <Row key={item.text} title={item.text} subtitle={item.detail ?? undefined} titleLines={2} onPress={() => forget(item.text, item.ids)} chevron={false} />
             ))}
           </Group>
         ))
