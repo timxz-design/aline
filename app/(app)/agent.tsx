@@ -128,8 +128,10 @@ export default function AgentScreen() {
         .from('chat_messages')
         .select('id, user_id, role, content, created_at, image_url, goal_plan_id, event_ids, extracted_data, model, input_tokens, output_tokens')
         .eq('user_id', user.id)
+        // History reaches back one week; the server keeps raw chat 30 days.
+        .gte('created_at', new Date(Date.now() - 7 * 86_400_000).toISOString())
         .order('created_at', { ascending: false })
-        .limit(200);
+        .limit(300);
       if (qErr) throw new Error(qErr.message);
       setMessages(((data ?? []) as ChatMessage[]).reverse());
     } catch (e) {

@@ -145,12 +145,6 @@ export async function maybeRecompute(opts: { force?: boolean } = {}): Promise<Re
         markRan(state, 'cluster', true);
         clusterRan = true;
         newPlaces = r.newPlacesCreated ?? 0;
-        // No pings yet → don't run downstream stages.
-        if (r.pingsRead === 0) {
-          await writeState(state);
-          await AsyncStorage.removeItem(IN_FLIGHT_KEY).catch(() => {});
-          return { ranAny: true, state };
-        }
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
