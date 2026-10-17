@@ -25,7 +25,7 @@
         "com.apple.developer.healthkit": true,
         "com.apple.developer.healthkit.access": []
       },
-      "buildNumber": "39",
+      "buildNumber": "40",
       "infoPlist": {
         "NSCalendarsUsageDescription": "ALINE reads your calendar to coordinate hangouts with your friend groups.",
         "NSContactsUsageDescription": "ALINE uses contacts to help you invite friends to your groups.",
