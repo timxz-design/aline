@@ -6,6 +6,7 @@ import { AppState, Text, View, type AppStateStatus } from 'react-native';
 import { logSessionClose, logSessionOpen, type SessionSource } from '../../src/lib/app-sessions';
 import { useAuth } from '../../src/lib/auth-context';
 import { maybeRecompute } from '../../src/lib/auto-recompute';
+import { syncMotionActivity, syncVisits } from '../../src/lib/day-signals';
 import { foregroundSampleOnce, startBackgroundGps, stopBackgroundGps, syncGeofences } from '../../src/lib/backgroundGps';
 import { syncDeviceCalendar } from '../../src/lib/device-calendar';
 import { syncHealth } from '../../src/lib/health';
@@ -78,7 +79,11 @@ export default function AppLayout() {
     const recomputeTimer = setTimeout(() => {
       maybeRecompute();
       syncDeviceCalendar();
-      ensureMotionPermission().then(() => syncSteps());
+      ensureMotionPermission().then(() => {
+        syncSteps();
+        syncMotionActivity(); // same Motion & Fitness permission
+      });
+      syncVisits();
       syncHealth(); // no-op until Apple Health is connected
       reportCollectionHealth();
     }, 8000);
@@ -103,6 +108,8 @@ export default function AppLayout() {
           maybeRecompute();
           syncDeviceCalendar();
           syncSteps();
+          syncMotionActivity();
+          syncVisits();
           syncHealth();
           reportCollectionHealth();
         }, 8000);

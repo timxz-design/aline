@@ -12,6 +12,8 @@
  * Both are best-effort and never throw.
  */
 
+import { isMotionActivityAvailable, pendingVisits } from '../../modules/day-signals';
+import { ensureVisitMonitoring } from './day-signals';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import NetInfo from '@react-native-community/netinfo';
 import * as Application from 'expo-application';
@@ -70,6 +72,10 @@ export async function reportCollectionHealth(): Promise<void> {
 
     // iOS doesn't expose the "Precise Location" toggle directly; a reduced-
     // accuracy fix comes back with a radius of several km.
+    const [visitsOn, motionSynced] = await Promise.all([
+      ensureVisitMonitoring(),
+      AsyncStorage.getItem('aline_motion_synced_until_ms').catch(() => null),
+    ]);
     const acc = lastKnown?.coords.accuracy;
     const precise = acc == null ? null : acc < 1000;
 
@@ -92,6 +98,10 @@ export async function reportCollectionHealth(): Promise<void> {
       calendar_permission: cal?.status ?? null,
       motion_permission: motion?.status ?? null,
       last_steps_synced_hour: cursor ? new Date(parseInt(cursor, 10)).toISOString() : null,
+      visits_monitoring: visitsOn,
+      visits_queued: pendingVisits().length,
+      motion_activity_available: isMotionActivityAvailable(),
+      last_motion_synced_at: motionSynced ? new Date(parseInt(motionSynced, 10)).toISOString() : null,
       reported_at: new Date().toISOString(),
     });
   } catch (e) {

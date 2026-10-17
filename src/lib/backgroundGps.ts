@@ -25,7 +25,9 @@ import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
 import { Platform } from 'react-native';
 import { encodeGeohash } from './clustering';
+import { stopVisitMonitoring } from '../../modules/day-signals';
 import { fetchCurrentWifi } from '../../modules/wifi-info';
+import { ensureVisitMonitoring, syncVisits } from './day-signals';
 import { getDeviceId } from './device-id';
 import { supabase } from './supabase';
 
@@ -46,6 +48,7 @@ const GEOFENCE_SYNC_KEY = 'aline_geofence_region_ids'; // skip redundant re-sync
 
 /** Origin of a behavioral ping — provenance for evidence weighting. */
 type PingSource = 'movement' | 'periodic' | 'foreground' | 'geofence';
+// ('visit' pings come from iOS visit monitoring — see ./day-signals.)
 
 type MotionState = 'stationary' | 'walking' | 'active' | 'driving' | 'unknown';
 
@@ -153,6 +156,16 @@ function validSpeed(speed: number | null | undefined): number | null {
 // cap keeps the upload rate sane during long drives.
 const MIN_UPLOAD_GAP_MS = 60 * 1000; // 1 minute
 const LAST_PING_KEY = 'aline_last_ping_uploaded_ms';
+// Same spot, again within this window → skip, even for forced samples. iOS
+// reports "app became active" twice in a row (Face ID, notification shade,
+// system alerts), and a geofence ENTER fires when you're already inside — each
+// produced a duplicate ping. Staying put adds nothing until the next periodic
+// sample; moving to a new cell always records.
+const SAME_PLACE_GAP_MS = 10 * 60 * 1000;
+const LAST_CELL_KEY = 'aline_last_ping_cell';
+// Serialises recordPing so two near-simultaneous calls can't both pass the
+// dedupe check before either has written its marker.
+let pingChain: Promise<void> = Promise.resolve();
 
 // ---------- task definition (must run at import time) -----------------------
 
@@ -161,7 +174,13 @@ const LAST_PING_KEY = 'aline_last_ping_uploaded_ms';
  * Used by the movement stream, the periodic sampler, and the foreground sample.
  * `force` skips the throttle (for explicit one-shot samples).
  */
-async function recordPing(
+function recordPing(...args: Parameters<typeof recordPingNow>): Promise<void> {
+  const next = pingChain.then(() => recordPingNow(...args));
+  pingChain = next.catch(() => {});
+  return next;
+}
+
+async function recordPingNow(
   lat: number,
   lon: number,
   capturedAtMs: number,
@@ -172,13 +191,17 @@ async function recordPing(
 ): Promise<void> {
   try {
     const now = Date.now();
-    if (!force) {
-      try {
-        const lastRaw = await AsyncStorage.getItem(LAST_PING_KEY);
-        const last = lastRaw ? parseInt(lastRaw, 10) : 0;
-        if (Number.isFinite(last) && now - last < MIN_UPLOAD_GAP_MS) return;
-      } catch { /* ignore */ }
-    }
+    const cell = encodeGeohash(lat, lon, 8);
+    try {
+      const [lastRaw, lastCell] = await Promise.all([
+        AsyncStorage.getItem(LAST_PING_KEY),
+        AsyncStorage.getItem(LAST_CELL_KEY),
+      ]);
+      const last = lastRaw ? parseInt(lastRaw, 10) : 0;
+      const since = Number.isFinite(last) ? now - last : Infinity;
+      if (lastCell === cell && since < SAME_PLACE_GAP_MS) return;
+      if (!force && since < MIN_UPLOAD_GAP_MS) return;
+    } catch { /* ignore */ }
 
     const { data: { session } } = await supabase.auth.getSession();
     if (!session) return;
@@ -187,7 +210,7 @@ async function recordPing(
     const { error: insertErr } = await supabase.from('behavioral_pings').insert([{
       user_id: session.user.id,
       captured_at: new Date(capturedAtMs).toISOString(),
-      geohash_8: encodeGeohash(lat, lon, 8),
+      geohash_8: cell,
       motion_state: motionState,
       speed_mps: speedMps,
       battery_level: battery.level,
@@ -200,7 +223,9 @@ async function recordPing(
       console.warn('[ALINE GPS] Upload failed:', insertErr.message);
       return;
     }
-    try { await AsyncStorage.setItem(LAST_PING_KEY, String(now)); } catch { /* ignore */ }
+    try {
+      await AsyncStorage.multiSet([[LAST_PING_KEY, String(now)], [LAST_CELL_KEY, cell]]);
+    } catch { /* ignore */ }
   } catch (e) {
     console.warn('[ALINE GPS] recordPing exception:', e);
   }
@@ -219,6 +244,7 @@ TaskManager.defineTask(BACKGROUND_LOCATION_TASK, async ({ data, error }) => {
     loc.coords.latitude, loc.coords.longitude, loc.timestamp, false, 'movement',
     validSpeed(loc.coords.speed),
   );
+  await syncVisits(); // any wake-up is a chance to upload queued iOS visits
 });
 
 // Periodic timer task (expo-background-task / iOS BGTaskScheduler): fires on the
@@ -233,6 +259,7 @@ TaskManager.defineTask(PERIODIC_LOCATION_TASK, async () => {
   } catch (e) {
     console.warn('[ALINE GPS] Periodic task exception:', e);
   }
+  await syncVisits();
   return BackgroundTask.BackgroundTaskResult.Success;
 });
 
@@ -262,6 +289,7 @@ TaskManager.defineTask(GEOFENCE_TASK, async ({ data, error }) => {
     null,
     'stationary',
   );
+  await syncVisits();
 });
 
 /**
@@ -406,6 +434,9 @@ export async function startBackgroundGps(): Promise<void> {
       return;
     }
 
+    // iOS visit monitoring: arrivals/departures even while the app is closed.
+    await ensureVisitMonitoring();
+
     const alreadyRunning = await Location.hasStartedLocationUpdatesAsync(BACKGROUND_LOCATION_TASK);
     if (alreadyRunning) return;
 
@@ -436,6 +467,7 @@ export async function stopBackgroundGps(): Promise<void> {
       console.log('[ALINE GPS] Background task stopped');
     }
     try { await BackgroundTask.unregisterTaskAsync(PERIODIC_LOCATION_TASK); } catch { /* ignore */ }
+    stopVisitMonitoring();
     try {
       if (await Location.hasStartedGeofencingAsync(GEOFENCE_TASK)) {
         await Location.stopGeofencingAsync(GEOFENCE_TASK);

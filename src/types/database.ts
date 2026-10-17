@@ -210,6 +210,10 @@ export type Database = {
           reported_at: string
           user_id: string
           wifi_probe: string | null
+          visits_monitoring: boolean | null
+          visits_queued: number | null
+          motion_activity_available: boolean | null
+          last_motion_synced_at: string | null
         }
         Insert: {
           app_build?: string | null
@@ -229,6 +233,10 @@ export type Database = {
           reported_at?: string
           user_id: string
           wifi_probe?: string | null
+          visits_monitoring?: boolean | null
+          visits_queued?: number | null
+          motion_activity_available?: boolean | null
+          last_motion_synced_at?: string | null
         }
         Update: {
           app_build?: string | null
@@ -248,6 +256,43 @@ export type Database = {
           reported_at?: string
           user_id?: string
           wifi_probe?: string | null
+          visits_monitoring?: boolean | null
+          visits_queued?: number | null
+          motion_activity_available?: boolean | null
+          last_motion_synced_at?: string | null
+        }
+        Relationships: []
+      }
+      motion_activity: {
+        Row: {
+          confidence: number
+          created_at: string
+          device_id: string | null
+          ended_at: string
+          id: string
+          kind: string
+          started_at: string
+          user_id: string
+        }
+        Insert: {
+          confidence?: number
+          created_at?: string
+          device_id?: string | null
+          ended_at: string
+          id?: string
+          kind: string
+          started_at: string
+          user_id: string
+        }
+        Update: {
+          confidence?: number
+          created_at?: string
+          device_id?: string | null
+          ended_at?: string
+          id?: string
+          kind?: string
+          started_at?: string
+          user_id?: string
         }
         Relationships: []
       }
