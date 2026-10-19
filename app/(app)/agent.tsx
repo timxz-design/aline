@@ -13,6 +13,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode
 import {
   ActivityIndicator,
   Alert,
+  AppState,
   FlatList,
   Image,
   KeyboardAvoidingView,
@@ -146,6 +147,53 @@ export default function AgentScreen() {
     loadChat();
   }, [loadChat]);
 
+  // Merge incoming rows (realtime or catch-up), and speak an agent reply if
+  // the user's last message was spoken.
+  const addIncoming = useCallback((rows: ChatMessage[]) => {
+    if (rows.length === 0) return;
+    setMessages((prev) => {
+      const known = new Set(prev.map((m) => m.id));
+      const fresh = rows.filter((m) => !known.has(m.id));
+      if (fresh.length === 0) return prev;
+      return [...prev, ...fresh].sort((a, b) => (a.created_at ?? '').localeCompare(b.created_at ?? ''));
+    });
+    // Voice in → voice out: speak the agent's reply only if the last
+    // message was spoken. Typed conversations stay silent.
+    const reply = rows.find((m) => m.role === 'agent');
+    if (reply && voiceReplyRef.current) {
+      voiceReplyRef.current = false;
+      Speech.stop();
+      Speech.speak(reply.content, { rate: 1.0 });
+    }
+  }, []);
+
+  // Realtime alone isn't enough: when its socket has dropped (app was in the
+  // background) a reply is saved but never delivered — "it did it but didn't
+  // answer". Catch up straight from the table after each agent call and on
+  // every return to the foreground.
+  const messagesRef = useRef<ChatMessage[]>([]);
+  messagesRef.current = messages;
+  const catchUp = useCallback(async () => {
+    if (!user) return;
+    const last = messagesRef.current[messagesRef.current.length - 1]?.created_at;
+    const since = last ?? new Date(Date.now() - 7 * 86_400_000).toISOString();
+    const { data } = await supabase
+      .from('chat_messages')
+      .select('id, user_id, role, content, created_at, image_url, goal_plan_id, event_ids, extracted_data, model, input_tokens, output_tokens')
+      .eq('user_id', user.id)
+      .gte('created_at', since)
+      .order('created_at', { ascending: true })
+      .limit(50);
+    addIncoming((data ?? []) as ChatMessage[]);
+  }, [user, addIncoming]);
+
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (s) => {
+      if (s === 'active') catchUp();
+    });
+    return () => sub.remove();
+  }, [catchUp]);
+
   // Subscribe to realtime inserts so agent replies appear automatically when
   // the `agent-respond` edge function writes them server-side.
   // Per-instance channel name avoids "cannot add postgres_changes after
@@ -163,26 +211,13 @@ export default function AgentScreen() {
           table: 'chat_messages',
           filter: `user_id=eq.${userId}`,
         },
-        (payload) => {
-          const msg = payload.new as ChatMessage;
-          setMessages((prev) => {
-            if (prev.some((m) => m.id === msg.id)) return prev;
-            return [...prev, msg];
-          });
-          // Voice in → voice out: speak the agent's reply only if the last
-          // message was spoken. Typed conversations stay silent.
-          if (msg.role === 'agent' && voiceReplyRef.current) {
-            voiceReplyRef.current = false;
-            Speech.stop();
-            Speech.speak(msg.content, { rate: 1.0 });
-          }
-        }
+        (payload) => addIncoming([payload.new as ChatMessage]),
       )
       .subscribe();
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [user?.id]);
+  }, [user?.id, addIncoming]);
 
   const send = () => sendText(draft, false);
 
@@ -307,6 +342,9 @@ export default function AgentScreen() {
       console.warn('agent-respond threw:', e);
       setError('Network issue talking to the agent.');
     } finally {
+      // The reply is in the table by the time the call returns; don't rely on
+      // realtime to have delivered it.
+      await catchUp().catch(() => {});
       setThinking(false);
     }
   };

@@ -1289,6 +1289,13 @@ You learn from every conversation. You represent ${firstName} when their agent t
   - When unsure, prefer apply:false (ask). A reschedule the user explicitly requested
     is apply:true; a reschedule you initiated is apply:false.
 
+  **Blocks never overlap.** Check find_open_slots first; never put a block on top of
+  another (two things at 17:00 is not "back-to-back"). **A missed goal session is
+  never doubled up**: if the target day already has a session of the same goal, don't
+  add a second one — say it's covered by that session, or offer a day without one.
+  The tool rejects overlaps and same-goal-same-day with a CONFLICT message; if you
+  get one, nothing changed — fix the time or ask, and never tell the user it's done.
+
   Bundling rule: when proposing a group hangout that also needs a calendar
   block, call propose_hangout FIRST to get the hangout id, then include a
   'create' op in the change set with the hangout_id linked.
@@ -3164,6 +3171,12 @@ async function executeTool(
       }
     }
 
+    // Blocks must never overlap, and a goal never gets two sessions on one day
+    // (a missed session isn't doubled up onto a day that already has one).
+    // Checked before anything is saved so the model can pick another time.
+    const conflict = await findChangeSetConflict(supabase, userId, userTimezone, normalized);
+    if (conflict) return { ok: false, message: conflict };
+
     const { data: inserted, error: insertErr } = await supabase
       .from('change_sets')
       .insert({
@@ -4220,6 +4233,82 @@ async function executeTool(
 // used by commit_goal_plan + the daily cron. No TS expansion needed here.)
 
 // Compact geohash decoder (cell center) — same scheme as resolve-places.
+/**
+ * Conflict check for a change set, in its final state (moved events at their
+ * new times, created ones added). Returns a message for the model, or null.
+ *  - overlap: any two blocks overlapping (transit envelopes and predicted
+ *    routine blocks excluded — those yield to real events anyway);
+ *  - same goal twice on one local day: a skipped session is not doubled up.
+ */
+async function findChangeSetConflict(
+  // deno-lint-ignore no-explicit-any
+  supabase: any,
+  userId: string,
+  timezone: string,
+  ops: Record<string, unknown>[],
+): Promise<string | null> {
+  type Block = { id: string | null; title: string; start: number; end: number; goalId: string | null };
+  const moveIds = ops.filter((o) => o.op === 'move').map((o) => String(o.event_id));
+  const movedMeta = new Map<string, { title: string; goal_id: string | null }>();
+  if (moveIds.length) {
+    const { data } = await supabase.from('calendar_events').select('id, title, goal_id').in('id', moveIds);
+    for (const e of data ?? []) movedMeta.set(e.id, { title: e.title ?? 'Block', goal_id: e.goal_id ?? null });
+  }
+  const proposed: Block[] = ops.map((o) =>
+    o.op === 'move'
+      ? {
+          id: String(o.event_id),
+          title: movedMeta.get(String(o.event_id))?.title ?? 'Block',
+          start: Date.parse(String(o.new_start)),
+          end: Date.parse(String(o.new_end)),
+          goalId: movedMeta.get(String(o.event_id))?.goal_id ?? null,
+        }
+      : {
+          id: null,
+          title: String(o.title),
+          start: Date.parse(String(o.start_at)),
+          end: Date.parse(String(o.end_at)),
+          goalId: o.goal_id ? String(o.goal_id) : null,
+        },
+  );
+  if (proposed.some((p) => !(p.end > p.start))) return 'Each block needs an end after its start.';
+
+  const lo = Math.min(...proposed.map((p) => p.start)) - 86_400_000;
+  const hi = Math.max(...proposed.map((p) => p.end)) + 86_400_000;
+  const { data: existingRows } = await supabase
+    .from('calendar_events')
+    .select('id, title, start_at, end_at, event_type, source, goal_id')
+    .eq('user_id', userId)
+    .lt('start_at', new Date(hi).toISOString())
+    .gt('end_at', new Date(lo).toISOString());
+  const existing: Block[] = (existingRows ?? [])
+    .filter((e: { id: string; event_type: string | null; source: string | null }) =>
+      !moveIds.includes(e.id) && e.event_type !== 'transit' && e.source !== 'routine')
+    .map((e: { id: string; title: string | null; start_at: string; end_at: string; goal_id: string | null }) => ({
+      id: e.id, title: e.title ?? 'Event', start: Date.parse(e.start_at), end: Date.parse(e.end_at), goalId: e.goal_id,
+    }));
+
+  const fmt = (ms: number) =>
+    new Date(ms).toLocaleString('en-GB', { timeZone: timezone, weekday: 'short', hour: '2-digit', minute: '2-digit' });
+  const day = (ms: number) => new Date(ms).toLocaleDateString('en-CA', { timeZone: timezone });
+
+  for (let i = 0; i < proposed.length; i++) {
+    const p = proposed[i];
+    const others = [...existing, ...proposed.filter((_, j) => j !== i)];
+    const hit = others.find((o) => o.start < p.end && o.end > p.start);
+    if (hit) {
+      return `CONFLICT — nothing was changed. "${p.title}" at ${fmt(p.start)} would overlap "${hit.title}" (${fmt(hit.start)}–${fmt(hit.end).slice(-5)}). Blocks must never overlap. Find a genuinely free time (find_open_slots) and propose again, or ask the user.`;
+    }
+    if (p.goalId) {
+      const same = others.find((o) => o.goalId === p.goalId && day(o.start) === day(p.start));
+      if (same) {
+        return `CONFLICT — nothing was changed. "${p.title}" would be a second session of the same goal on ${day(p.start)}: "${same.title}" is already at ${fmt(same.start)}. Don't double up a missed session — tell the user it's covered by that session, or offer a day that has no session of this goal.`;
+      }
+    }
+  }
+  return null;
+}
+
 function decodeGeohashLite(hash: string): { lat: number; lon: number } {
   const B32 = '0123456789bcdefghjkmnpqrstuvwxyz';
   let evenBit = true;
