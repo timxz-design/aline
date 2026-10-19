@@ -219,7 +219,16 @@ export default function AgentScreen() {
     };
   }, [user?.id, addIncoming]);
 
-  const send = () => sendText(draft, false);
+  // A dictated message gets a spoken reply (voice in → voice out).
+  const send = () => {
+    const fromVoice = dictatedRef.current;
+    dictatedRef.current = false;
+    if (listening) {
+      try { ExpoSpeechRecognitionModule.stop(); } catch {}
+      setListening(false);
+    }
+    sendText(draft, fromVoice);
+  };
 
   // Photo → chat: snap a poster (or pick a screenshot), it uploads to storage
   // and rides the message; the agent reads it server-side (vision) and can
@@ -350,13 +359,18 @@ export default function AgentScreen() {
   };
 
   // ---- Voice input (on-device STT) ----
+  // Dictation, not auto-send: recognition keeps listening through pauses until
+  // the mic is tapped again, and the transcript lands in the composer so a
+  // misheard word or a half-finished thought can be fixed before sending.
+  // (Auto-sending on iOS's end-of-phrase cut people off mid-sentence.)
+  const dictationPrefixRef = useRef('');
+  const dictatedRef = useRef(false);
   useSpeechRecognitionEvent('result', (e) => {
     const t = e.results?.[0]?.transcript ?? '';
-    if (t) setDraft(t);
-    if (e.isFinal && t.trim()) {
-      setListening(false);
-      sendText(t, true); // sendText drops a repeated final result for the same words
-    }
+    if (!t) return;
+    dictatedRef.current = true;
+    const prefix = dictationPrefixRef.current;
+    setDraft(prefix ? `${prefix} ${t}` : t);
   });
   useSpeechRecognitionEvent('end', () => setListening(false));
   useSpeechRecognitionEvent('error', (e) => {
@@ -385,14 +399,15 @@ export default function AgentScreen() {
       return;
     }
     setError(null);
-    setDraft('');
+    // Keep anything already typed; dictation appends to it.
+    dictationPrefixRef.current = draft.trim();
     setListening(true);
     ExpoSpeechRecognitionModule.start({
       lang: 'en-US',
       interimResults: true,
-      continuous: false,
+      continuous: true, // pauses don't end it — the mic button does
     });
-  }, [listening]);
+  }, [listening, draft]);
 
   // Notification deep-link: scroll to the focused message and pulse a
   // highlight. Waits for the message to be present (it may arrive via realtime
@@ -580,7 +595,10 @@ export default function AgentScreen() {
             placeholder={listening ? 'Listening…' : 'Talk to ALINE…'}
             placeholderTextColor={colors.textDim}
             value={draft}
-            onChangeText={setDraft}
+            onChangeText={(t) => {
+              if (!t) dictatedRef.current = false; // cleared → it's a typed message now
+              setDraft(t);
+            }}
             multiline
             onSubmitEditing={send}
           />
