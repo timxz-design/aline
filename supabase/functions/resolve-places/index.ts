@@ -23,6 +23,7 @@
 
 // @ts-expect-error — Deno-only deps; this file runs in Supabase Edge Runtime.
 import { createClient } from 'jsr:@supabase/supabase-js@2';
+import { rankPlacesForStay } from '../_shared/place-rank.ts';
 
 // @ts-expect-error
 const GOOGLE_PLACES_API_KEY = Deno.env.get('GOOGLE_PLACES_API_KEY');
@@ -30,6 +31,8 @@ const GOOGLE_PLACES_API_KEY = Deno.env.get('GOOGLE_PLACES_API_KEY');
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 // @ts-expect-error
 const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!;
+// @ts-expect-error
+const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -138,15 +141,7 @@ function isSensitive(primaryType: string | null, allTypes: string[] = []): boole
   return SENSITIVE_PATTERNS.some((p) => p.test(haystack));
 }
 
-// ---------- Google Places (New) call ----------------------------------------
-
-type PlacesHit = {
-  id: string;
-  displayName?: { text: string };
-  primaryType?: string;
-  types?: string[];
-  location?: { latitude: number; longitude: number };
-};
+// ---------- Google Places (New) — ranking lives in _shared/place-rank.ts ----
 
 // Non-activity infrastructure we never want to label a person's visit as.
 // Excluded at the API level so they don't even count toward maxResultCount.
@@ -160,37 +155,6 @@ const EXCLUDED_TYPES = [
   'light_rail_station',
   'transit_depot',
 ];
-
-async function nearbySearch(
-  lat: number,
-  lon: number,
-  radiusM = 40,
-): Promise<PlacesHit[]> {
-  const res = await fetch('https://places.googleapis.com/v1/places:searchNearby', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Goog-Api-Key': GOOGLE_PLACES_API_KEY!,
-      // Basic-tier field mask — keeps us on the cheaper SKU.
-      'X-Goog-FieldMask': 'places.id,places.displayName,places.types,places.primaryType,places.location',
-    },
-    body: JSON.stringify({
-      locationRestriction: {
-        circle: { center: { latitude: lat, longitude: lon }, radius: radiusM },
-      },
-      excludedTypes: EXCLUDED_TYPES,
-      maxResultCount: 5,
-      rankPreference: 'DISTANCE',
-    }),
-  });
-
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`Google Places ${res.status}: ${errText}`);
-  }
-  const data = (await res.json()) as { places?: PlacesHit[] };
-  return data.places ?? [];
-}
 
 // Primary types that are landmarks / generic / non-activity — we'd rather
 // return NO_MATCH than label a person's visit as one of these. A named tree
@@ -209,57 +173,17 @@ const GENERIC_PRIMARY_REJECT = new Set([
   'establishment',
 ]);
 
-/**
- * Choose the best candidate for "what was this person doing here", or null
- * (→ NO_MATCH). Bias: a no-match beats a false match.
- *   - reject transit/parking (also excluded server-side) anywhere in types
- *   - reject landmarks / generic / unknown-primary entries
- *   - among survivors prefer real activity venues, tie-break by distance
- */
-function selectBestCandidate(
-  hits: PlacesHit[],
-  centerLat: number,
-  centerLon: number,
-): PlacesHit | null {
-  let best: PlacesHit | null = null;
-  let bestScore = -Infinity;
-
-  for (const hit of hits) {
-    const primary = (hit.primaryType ?? '').toLowerCase();
-    const allTypes = (hit.types ?? []).map((t) => t.toLowerCase());
-
-    // Hard junk anywhere in the type list.
+/** First ranked candidate that isn't infrastructure or a generic landmark. */
+function pickRanked(ranked: Awaited<ReturnType<typeof rankPlacesForStay>>) {
+  for (const c of ranked) {
+    const primary = (c.primaryType ?? '').toLowerCase();
+    const allTypes = c.types.map((t) => t.toLowerCase());
     if (EXCLUDED_TYPES.some((b) => primary === b || allTypes.includes(b))) continue;
-    // Unknown or generic/landmark primary type → reject (prefer no-match).
     if (!primary || GENERIC_PRIMARY_REJECT.has(primary)) continue;
-
-    const dist =
-      hit.location
-        ? haversineMeters(centerLat, centerLon, hit.location.latitude, hit.location.longitude)
-        : 0;
-    const isActivity = categorize(primary) !== 'other';
-    // Activity venues dominate; nearer is better. (1000 >> any 40 m distance.)
-    const score = (isActivity ? 1000 : 0) - dist;
-
-    if (score > bestScore) {
-      bestScore = score;
-      best = hit;
-    }
+    if (c.score <= 0) continue;
+    return c;
   }
-
-  return best;
-}
-
-/** Haversine distance in metres. */
-function haversineMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
-  const R = 6_371_000;
-  const toRad = (d: number) => (d * Math.PI) / 180;
-  const dLat = toRad(lat2 - lat1);
-  const dLon = toRad(lon2 - lon1);
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return null;
 }
 
 // ---------- handler ---------------------------------------------------------
@@ -286,6 +210,9 @@ Deno.serve(async (req: Request) => {
   const { data: userData, error: userErr } = await supabase.auth.getUser();
   if (userErr || !userData?.user) return jsonRes({ error: 'Unauthorized' }, 401);
   const userId = userData.user.id;
+  // Places are server-owned now (users can only edit label/category/hidden),
+  // so identity writes go through the service role — always scoped to userId.
+  const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
 
   // Optional body: { place_ids?: string[] } — if present, only resolve those.
   let bodyIds: string[] | undefined;
@@ -296,7 +223,7 @@ Deno.serve(async (req: Request) => {
 
   let q = supabase
     .from('places')
-    .select('id, geohash_7, centroid_lat, centroid_lon, google_place_id, name, category, inference_status, user_label')
+    .select('id, geohash_7, centroid_lat, centroid_lon, google_place_id, name, category, inference_status, user_label, visit_count, total_dwell_minutes')
     .eq('user_id', userId)
     .is('google_place_id', null);
   if (bodyIds && bodyIds.length > 0) q = q.in('id', bodyIds);
@@ -328,24 +255,29 @@ Deno.serve(async (req: Request) => {
         ? p.centroid_lon
         : decodeGeohash(p.geohash_7).lon;
 
-      const hits = await nearbySearch(lat, lon, 40);
-      const hit = selectBestCandidate(hits, lat, lon);
+      // Stay-aware ranking (destination you'd spend this long at, well known,
+      // close) instead of "nearest POI" — nearest-first is what named places
+      // after ATMs and parking lots. Same junk filters still apply.
+      const minutesPerVisit = (p.total_dwell_minutes ?? 0) / Math.max(1, p.visit_count ?? 1);
+      const ranked = await rankPlacesForStay(lat, lon, minutesPerVisit, 100);
+      const hit = pickRanked(ranked);
 
       if (!hit) {
         results.push({ place_id: p.id, ok: true, name: undefined });
         // mark resolved-but-empty so we don't keep retrying — set a sentinel
-        await supabase
+        await admin
           .from('places')
           .update({
             google_place_id: 'NO_MATCH',
             inference_status: 'pending',
             updated_at: new Date().toISOString(),
           })
-          .eq('id', p.id);
+          .eq('id', p.id)
+          .eq('user_id', userId);
         continue;
       }
 
-      const name = hit.displayName?.text ?? null;
+      const name = hit.name ?? null;
       const primaryType = hit.primaryType ?? null;
       // Defense-in-depth: behavioral categories are never sourced from Google.
       // categorize() no longer returns these, but clamp anyway so a future
@@ -363,7 +295,7 @@ Deno.serve(async (req: Request) => {
       const preserveLabel = isUserCorrected || isStrongTimeLabel;
 
       const updatePayload: Record<string, unknown> = {
-        google_place_id: hit.id,
+        google_place_id: hit.googleId,
         is_sensitive: sensitive,
         updated_at: new Date().toISOString(),
       };
@@ -373,10 +305,11 @@ Deno.serve(async (req: Request) => {
         updatePayload.category = category;
       }
 
-      const { error: updErr } = await supabase
+      const { error: updErr } = await admin
         .from('places')
         .update(updatePayload)
-        .eq('id', p.id);
+        .eq('id', p.id)
+        .eq('user_id', userId);
 
       if (updErr) {
         results.push({ place_id: p.id, ok: false, error: updErr.message });

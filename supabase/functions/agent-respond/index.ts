@@ -2182,6 +2182,20 @@ Deno.serve(async (req: Request) => {
   const visitsBlock = visitLines.length
     ? `Their day as visits (last 24h, from location; times are when they arrived/left). Use this for "when did I leave/arrive", "how long was I at…", and to know where they are now. Guesses can be wrong — correct them with correct_visit when the user tells you:\n${visitLines.join('\n')}`
     : '';
+  // Appointments without a location → where they went last time for the same
+  // appointment (from visits matched to the calendar), so "when should I
+  // leave?" works without asking for the address every time.
+  const { data: apptLocs } = await supabase.rpc('appointment_locations');
+  const apptLines = ((apptLocs ?? []) as {
+    event_title: string; starts_at: string; last_visit: string; lat: number; lon: number; spot_name: string | null;
+  }[]).map((a) => {
+    const when = new Date(a.starts_at).toLocaleString('en-GB', { timeZone: tz, weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+    const last = new Date(a.last_visit).toLocaleDateString('en-GB', { timeZone: tz, day: 'numeric', month: 'short' });
+    return `  - "${a.event_title}" ${when}: no location in the calendar. Last time (${last}) they went to ${a.spot_name ? `"${a.spot_name}"` : 'a spot'} at ${a.lat.toFixed(5)},${a.lon.toFixed(5)}.`;
+  });
+  const apptBlock = apptLines.length
+    ? `Where past appointments were (same title as an upcoming one with no address). Assume the same place unless they say otherwise — use these coordinates as the destination for get_travel_time / leave-time, and say you're assuming it ("same place as last time?"). Don't ask for the address:\n${apptLines.join('\n')}`
+    : '';
   const durationsBlock = durationLines.length
     ? `Learned activity lengths (measured). When you create or move a block for one of these, use this length rather than a guess:\n${durationLines.join('\n')}`
     : '';
@@ -2194,7 +2208,7 @@ Deno.serve(async (req: Request) => {
     },
     {
       type: 'text' as const,
-      text: [dynamicBlock, visitsBlock, openQuestionsBlock, durationsBlock].filter(Boolean).join('\n\n'),
+      text: [dynamicBlock, visitsBlock, apptBlock, openQuestionsBlock, durationsBlock].filter(Boolean).join('\n\n'),
     },
   ];
 
