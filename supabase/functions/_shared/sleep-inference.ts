@@ -292,3 +292,71 @@ export function inferSleepFromHealth(
     days_observed: nightsObserved,
   };
 }
+
+export type MotionSegment = { kind: string; started_at: string; ended_at: string };
+
+/**
+ * Bed/wake from the iOS motion history, for everyone without Health sleep
+ * data (no Apple Watch / no sleep schedule). Per night: the longest stretch
+ * the phone lay still (iOS splits ≤ 2 min merged), ≥ 3 h, covering part of
+ * 01:00–05:00 local. A still phone is a phone on the nightstand — or on a
+ * table all evening — so bedtime moves past any app use inside the stretch
+ * before 05:00. Wake = first movement, which is sharp.
+ *
+ * Quality: 'high' from 7 nights (shown), 'medium' from 4 (kept hidden).
+ */
+export function inferSleepFromMotion(
+  segments: MotionSegment[],
+  sessions: SleepInferenceSession[],
+  timezone: string,
+): SleepInferenceResult {
+  const still = segments
+    .filter((s) => s.kind === 'stationary')
+    .map((s) => [Date.parse(s.started_at), Date.parse(s.ended_at)] as [number, number])
+    .filter(([a, b]) => b > a)
+    .sort((x, y) => x[0] - y[0]);
+  const merged: [number, number][] = [];
+  for (const [a, b] of still) {
+    const last = merged[merged.length - 1];
+    // Only bridge iOS's own seconds-long splits. Any longer gap is the phone
+    // being picked up — bridging 20 min chained evening, night and next day
+    // into one multi-day "night".
+    if (last && a - last[1] <= 2 * 60_000) last[1] = Math.max(last[1], b);
+    else merged.push([a, b]);
+  }
+
+  const opens = sessions.map((s) => Date.parse(s.opened_at)).filter(Number.isFinite);
+  const minuteAt = (ms: number) => localMinuteOfDay(new Date(ms).toISOString(), timezone);
+  const coversDeepNight = ([a, b]: [number, number]) => {
+    for (let t = a; t <= b; t += 15 * 60_000) {
+      const m = minuteAt(t);
+      if (m >= 60 && m <= 300) return true;
+    }
+    return false;
+  };
+
+  // longest qualifying stretch per night (night = local day of start − 12 h)
+  const best = new Map<string, [number, number]>();
+  for (const block of merged) {
+    if (block[1] - block[0] < 3 * 3600_000 || !coversDeepNight(block)) continue;
+    let [bed, wake] = block;
+    // app use inside the stretch before 05:00 local → not asleep yet
+    for (const o of opens) {
+      if (o > bed && o < wake && (minuteAt(o) >= 18 * 60 || minuteAt(o) < 5 * 60)) bed = o;
+    }
+    if (wake - bed < 3 * 3600_000) continue;
+    const key = localDayKey(new Date(bed - 12 * 3600_000).toISOString(), timezone);
+    const prev = best.get(key);
+    if (!prev || wake - bed > prev[1] - prev[0]) best.set(key, [bed, wake]);
+  }
+
+  const nights: HealthSleepInterval[] = [...best.values()].map(([a, b]) => ({
+    stage: 'asleep',
+    started_at: new Date(a).toISOString(),
+    ended_at: new Date(b).toISOString(),
+  }));
+  const r = inferSleepFromHealth(nights, timezone);
+  // A week of still nights is as solid as a week of app opens (the summary
+  // only shows 'high'); fewer nights stay hidden.
+  return { ...r, data_quality: r.days_observed >= 7 ? 'high' : r.days_observed >= 4 ? 'medium' : 'low' };
+}

@@ -7,7 +7,7 @@
  */
 // @ts-nocheck Deno edge runtime
 import { createClient } from 'jsr:@supabase/supabase-js@2';
-import { inferSleep, inferSleepFromHealth } from '../_shared/sleep-inference.ts';
+import { inferSleep, inferSleepFromHealth, inferSleepFromMotion } from '../_shared/sleep-inference.ts';
 import { computeSummary } from '../_shared/summary-algo.ts';
 
 const CRON_SECRET = Deno.env.get('CRON_SECRET');
@@ -18,7 +18,7 @@ const daysAgo = (d: number) => new Date(Date.now() - d * DAY).toISOString();
 const WORKOUT_WEEKS = 4;
 
 async function rebuild(userId: string, timezone: string) {
-  const [pingsRes, placesRes, routinesRes, sessionsRes, sleepRes, stepsRes, workoutsRes] = await Promise.all([
+  const [pingsRes, placesRes, routinesRes, sessionsRes, sleepRes, stepsRes, workoutsRes, motionRes] = await Promise.all([
     admin.from('behavioral_pings').select('captured_at').eq('user_id', userId).gte('captured_at', daysAgo(30)),
     admin.from('places').select('category, visit_count').eq('user_id', userId).eq('is_hidden', false),
     admin.from('routines').select('category, consistency').eq('user_id', userId).eq('active', true),
@@ -26,15 +26,20 @@ async function rebuild(userId: string, timezone: string) {
     admin.from('health_sleep').select('stage, started_at, ended_at').eq('user_id', userId).gte('started_at', daysAgo(21)),
     admin.from('step_counts').select('hour_start, steps').eq('user_id', userId).gte('hour_start', daysAgo(14)),
     admin.from('health_workouts').select('duration_min').eq('user_id', userId).gte('started_at', daysAgo(WORKOUT_WEEKS * 7)),
+    admin.from('motion_activity').select('kind, started_at, ended_at').eq('user_id', userId).gte('ended_at', daysAgo(21)),
   ]);
   const err = [pingsRes, placesRes, routinesRes].find((r) => r.error)?.error;
   if (err) throw new Error(err.message);
 
-  // Sleep: measured Apple Health nights win; app-open times are the fallback.
+  // Sleep, best source first: measured Apple Health nights → nights the phone
+  // lay still (iOS motion; works without a Watch) → app-open times.
   const healthSleep = inferSleepFromHealth(sleepRes.data ?? [], timezone);
+  const motionSleep = inferSleepFromMotion(motionRes.data ?? [], sessionsRes.data ?? [], timezone);
   const sleep = healthSleep.data_quality === 'high'
     ? healthSleep
-    : inferSleep({ sessions: sessionsRes.data ?? [], timezone });
+    : motionSleep.data_quality === 'high'
+      ? motionSleep
+      : inferSleep({ sessions: sessionsRes.data ?? [], timezone });
 
   // Steps: average over full local days with any steps (today is still filling).
   const todayKey = new Date().toLocaleDateString('en-CA', { timeZone: timezone });

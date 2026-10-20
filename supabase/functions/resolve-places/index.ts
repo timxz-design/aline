@@ -33,6 +33,8 @@ const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!;
 // @ts-expect-error
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+// @ts-expect-error
+const CRON_SECRET = Deno.env.get('CRON_SECRET');
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -200,19 +202,26 @@ Deno.serve(async (req: Request) => {
     );
   }
 
-  const authHeader = req.headers.get('Authorization');
-  if (!authHeader) return jsonRes({ error: 'Missing Authorization' }, 401);
-
-  const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-    global: { headers: { Authorization: authHeader } },
-  });
-
-  const { data: userData, error: userErr } = await supabase.auth.getUser();
-  if (userErr || !userData?.user) return jsonRes({ error: 'Unauthorized' }, 401);
-  const userId = userData.user.id;
   // Places are server-owned now (users can only edit label/category/hidden),
-  // so identity writes go through the service role — always scoped to userId.
+  // so identity writes go through the service role — always scoped to the
+  // place's own user.
   const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+
+  // Two callers: the hourly cron (x-cron-key) names every user's unnamed
+  // places — so testers who rarely open the app still get names — and the
+  // app (user JWT) for that user's places only.
+  const isCron = !!CRON_SECRET && req.headers.get('x-cron-key') === CRON_SECRET;
+  let userId: string | null = null;
+  if (!isCron) {
+    const authHeader = req.headers.get('Authorization');
+    if (!authHeader) return jsonRes({ error: 'Missing Authorization' }, 401);
+    const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: authHeader } },
+    });
+    const { data: userData, error: userErr } = await supabase.auth.getUser();
+    if (userErr || !userData?.user) return jsonRes({ error: 'Unauthorized' }, 401);
+    userId = userData.user.id;
+  }
 
   // Optional body: { place_ids?: string[] } — if present, only resolve those.
   let bodyIds: string[] | undefined;
@@ -221,11 +230,12 @@ Deno.serve(async (req: Request) => {
     if (Array.isArray(body?.place_ids)) bodyIds = body.place_ids;
   } catch { /* empty body is fine */ }
 
-  let q = supabase
+  let q = admin
     .from('places')
-    .select('id, geohash_7, centroid_lat, centroid_lon, google_place_id, name, category, inference_status, user_label, visit_count, total_dwell_minutes')
-    .eq('user_id', userId)
-    .is('google_place_id', null);
+    .select('id, user_id, geohash_7, centroid_lat, centroid_lon, google_place_id, name, category, inference_status, user_label, visit_count, total_dwell_minutes')
+    .is('google_place_id', null)
+    .limit(40);
+  if (userId) q = q.eq('user_id', userId);
   if (bodyIds && bodyIds.length > 0) q = q.in('id', bodyIds);
 
   const { data: places, error: fetchErr } = await q;
@@ -273,7 +283,7 @@ Deno.serve(async (req: Request) => {
             updated_at: new Date().toISOString(),
           })
           .eq('id', p.id)
-          .eq('user_id', userId);
+          .eq('user_id', p.user_id);
         continue;
       }
 
@@ -309,7 +319,7 @@ Deno.serve(async (req: Request) => {
         .from('places')
         .update(updatePayload)
         .eq('id', p.id)
-        .eq('user_id', userId);
+        .eq('user_id', p.user_id);
 
       if (updErr) {
         results.push({ place_id: p.id, ok: false, error: updErr.message });

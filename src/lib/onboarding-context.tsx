@@ -63,6 +63,10 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
         .update({
           social_openness: socialOpenness,
           onboarding_complete: true,
+          // The phone's own time zone from the first minute — the column
+          // default is a placeholder, and every server-side time (pushes,
+          // quiet hours, "yesterday") is computed in this.
+          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
         })
         .eq('id', userId);
 
