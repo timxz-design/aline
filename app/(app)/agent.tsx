@@ -15,6 +15,8 @@ import {
   Alert,
   AppState,
   FlatList,
+  Keyboard,
+  ScrollView,
   Image,
   KeyboardAvoidingView,
   Linking,
@@ -518,7 +520,7 @@ export default function AgentScreen() {
             <ActivityIndicator color={colors.accent} />
           </View>
         ) : visibleMessages.length === 0 ? (
-          <EmptyAgentState firstName={profile?.first_name ?? null} />
+          <EmptyAgentState firstName={profile?.first_name ?? null} onPick={setDraft} />
         ) : (
           <FlatList
             ref={listRef}
@@ -830,32 +832,50 @@ const Bubble = memo(function Bubble({
   );
 });
 
-function EmptyAgentState({ firstName }: { firstName: string | null }) {
+function EmptyAgentState({
+  firstName,
+  onPick,
+}: {
+  firstName: string | null;
+  onPick: (text: string) => void;
+}) {
   const greeting = firstName ? `Hey ${firstName}.` : 'Hey there.';
+  // Scrollable, so with the keyboard up it scrolls instead of spilling over
+  // the header; drag or tap on it closes the keyboard (there's no message list
+  // here to do that).
   return (
-    <View style={styles.empty}>
-      <Text style={styles.emptyMark}>✦</Text>
-      <Text style={styles.emptyTitle}>{greeting}</Text>
-      <Text style={styles.emptyBody}>
-        I'm ALINE — your personal agent. Tell me what's going on, or talk like
-        you would to a friend who actually pays attention. I'll learn the
-        rhythms of your week and start coordinating with the people in your
-        life.
-      </Text>
-      <View style={styles.suggestionList}>
-        <SuggestionChip text='"What does my Tuesday look like?"' />
-        <SuggestionChip text='"Schedule a 1-hour run tomorrow morning"' />
-        <SuggestionChip text='"Plan dinner with the crew this week"' />
-      </View>
-    </View>
+    <ScrollView
+      style={{ flex: 1 }}
+      contentContainerStyle={styles.empty}
+      keyboardDismissMode="interactive"
+      keyboardShouldPersistTaps="handled"
+    >
+      <Pressable style={styles.emptyInner} onPress={Keyboard.dismiss} accessible={false}>
+        <Text style={styles.emptyMark}>✦</Text>
+        <Text style={styles.emptyTitle}>{greeting}</Text>
+        <Text style={styles.emptyBody}>
+          I'm ALINE — your personal agent. Tell me what's going on, or talk like
+          you would to a friend who actually pays attention. I'll learn the
+          rhythms of your week and start coordinating with the people in your
+          life.
+        </Text>
+        <View style={styles.suggestionList}>
+          {['What does my Tuesday look like?', 'Schedule a 1-hour run tomorrow morning', 'Plan dinner with the crew this week'].map(
+            (t) => (
+              <SuggestionChip key={t} text={t} onPress={() => onPick(t)} />
+            ),
+          )}
+        </View>
+      </Pressable>
+    </ScrollView>
   );
 }
 
-function SuggestionChip({ text }: { text: string }) {
+function SuggestionChip({ text, onPress }: { text: string; onPress: () => void }) {
   return (
-    <View style={styles.chip}>
-      <Text style={styles.chipText}>{text}</Text>
-    </View>
+    <Pressable onPress={onPress} style={({ pressed }) => [styles.chip, pressed && { opacity: 0.7 }]} hitSlop={4}>
+      <Text style={styles.chipText}>"{text}"</Text>
+    </Pressable>
   );
 }
 
@@ -1036,12 +1056,11 @@ const styles = StyleSheet.create({
     marginTop: -2,
   },
   empty: {
-    flex: 1,
-    alignItems: 'center',
+    flexGrow: 1,
     justifyContent: 'center',
     padding: space.xl,
-    gap: space.sm,
   },
+  emptyInner: { alignItems: 'center', gap: space.sm },
   emptyMark: { fontSize: 48, color: colors.accent, marginBottom: space.sm },
   emptyTitle: {
     color: colors.text,
