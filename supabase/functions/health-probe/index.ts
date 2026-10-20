@@ -46,14 +46,29 @@ Deno.serve(async (req) => {
       if (j.status !== 'OK' || el?.status !== 'OK') throw new Error(`${j.status} ${el?.status ?? ''} ${j.error_message ?? ''}`);
       return el.duration?.text ?? 'ok';
     }),
-    // Anthropic: the agent itself. Listing models is free and proves the key works.
+    // Anthropic: the agent itself — a tiny real request with the agent's model
+    // and settings (incl. a tool), so a rejected config shows up here, not as
+    // users' messages going unanswered.
     check('anthropic', async () => {
       if (!ANTHROPIC_KEY) throw new Error('no key configured');
-      const r = await fetch('https://api.anthropic.com/v1/models?limit=1', {
-        headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01' },
+      const model = Deno.env.get('ANTHROPIC_MODEL') ?? 'claude-sonnet-5-5';
+      const r = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01' },
+        body: JSON.stringify({
+          model,
+          max_tokens: 64,
+          ...(model.startsWith('claude-sonnet-5-5')
+            ? { thinking: { type: 'between_tools' }, output_config: { effort: 'medium' } }
+            : {}),
+          tools: [{ name: 'ping', description: 'Health check tool. Do not call.', input_schema: { type: 'object', properties: {} } }],
+          messages: [{ role: 'user', content: 'Reply with the word ok.' }],
+        }),
       });
-      if (!r.ok) throw new Error(`HTTP ${r.status}: ${(await r.text()).slice(0, 200)}`);
-      return 'ok';
+      const j = await r.json();
+      if (!r.ok) throw new Error(`HTTP ${r.status}: ${JSON.stringify(j.error ?? j).slice(0, 200)}`);
+      const text = (j.content ?? []).filter((b) => b.type === 'text').map((b) => b.text).join('');
+      return `${model}: ${text.slice(0, 20)}`;
     }),
   ]);
 

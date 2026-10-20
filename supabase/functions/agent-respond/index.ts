@@ -19,7 +19,7 @@
  *
  * Secrets required:
  *   - ANTHROPIC_API_KEY        (your Anthropic key)
- *   - ANTHROPIC_MODEL          (optional, defaults to claude-sonnet-4-5)
+ *   - ANTHROPIC_MODEL          (optional, defaults to claude-sonnet-5-5)
  * ----------------------------------------------------------------------------
  */
 
@@ -103,6 +103,7 @@ type InterestRow = {
   key: string;
   value: unknown;
   confidence: number | null;
+  source: string | null;
 };
 
 type GroupRow = {
@@ -218,7 +219,12 @@ type ClaudeMessage = {
 // ---------- config --------------------------------------------------------
 const MODEL =
   // @ts-expect-error
-  Deno.env.get('ANTHROPIC_MODEL') ?? 'claude-sonnet-4-5';
+  Deno.env.get('ANTHROPIC_MODEL') ?? 'claude-sonnet-5-5';
+// `between_tools` (no extended thinking) is Sonnet 5.5-only; other models get
+// their defaults, so overriding ANTHROPIC_MODEL never sends a rejected field.
+const THINKING_PARAMS: Record<string, unknown> = MODEL.startsWith('claude-sonnet-5-5')
+  ? { thinking: { type: 'between_tools' }, output_config: { effort: 'medium' } }
+  : {};
 // @ts-expect-error
 const ANTHROPIC_API_KEY = Deno.env.get('ANTHROPIC_API_KEY');
 // @ts-expect-error
@@ -1001,12 +1007,25 @@ function buildSystemPromptBlocks(input: {
           })
           .join('\n');
 
+  // Onboarding chips ("Coffee / chill hangs") are broad categories tapped in
+  // seconds at signup — weak hints. What they've said in chat outranks them.
+  const learned = interests.filter((i) => i.source !== 'onboarding');
+  const picked = interests.filter((i) => i.source === 'onboarding');
   const interestLines =
     interests.length === 0
       ? 'None learned yet.'
-      : interests
-          .map((i) => `  - ${i.key}: ${JSON.stringify(i.value)}`)
-          .join('\n');
+      : [
+          ...learned.map((i) => `  - ${i.key}: ${JSON.stringify(i.value)}`),
+          ...(picked.length
+            ? [
+                `  Picked at signup (broad categories, weak hints — what they've told you outranks these; don't treat them as stated preferences):`,
+                ...picked.map((i) => {
+                  const v = i.value as { label?: string } | string;
+                  return `    · ${typeof v === 'string' ? v : v?.label ?? JSON.stringify(v)}`;
+                }),
+              ]
+            : []),
+        ].join('\n');
 
   const groupLines =
     groups.length === 0
@@ -1760,7 +1779,7 @@ Deno.serve(async (req: Request) => {
       .limit(20),
     supabase
       .from('interests')
-      .select('id, key, value, confidence')
+      .select('id, key, value, confidence, source')
       .eq('user_id', userId)
       .eq('active', true)
       .order('updated_at', { ascending: false })
@@ -2263,7 +2282,11 @@ Deno.serve(async (req: Request) => {
       },
       body: JSON.stringify({
         model: MODEL,
-        max_tokens: 1024,
+        // Short chat turns. Thinking off (Sonnet 5.5's lowest setting): replies
+        // stay as fast and cheap as before, and between-tool notes come back as
+        // thinking blocks that we pass back unchanged with the assistant turn.
+        max_tokens: 2048,
+        ...THINKING_PARAMS,
         system: systemArray,
         tools: TOOLS,
         messages,
@@ -2351,7 +2374,8 @@ Deno.serve(async (req: Request) => {
       },
       body: JSON.stringify({
         model: MODEL,
-        max_tokens: 1024,
+        max_tokens: 2048,
+        ...THINKING_PARAMS,
         system: systemArray,
         tools: TOOLS,
         tool_choice: { type: 'none' },

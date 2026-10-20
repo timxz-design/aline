@@ -2,7 +2,7 @@
  * App-session logging — captures every time the user brings ALINE to the
  * foreground, and how long they stayed. Powers two things:
  *
- *   1. Wake/sleep inference (sleep-inference.ts) — first session of the day
+ *   1. Wake/sleep inference (server: _shared/sleep-inference.ts) — first session of the day
  *      after a multi-hour gap is a reliable proxy for wake time. Last
  *      session before a gap is a proxy for bedtime.
  *   2. Morning ritual detection — Week tab uses last_session_at vs today's

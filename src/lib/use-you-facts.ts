@@ -178,7 +178,8 @@ const INTEREST_GROUPS: Record<string, string> = {
   life_event: 'Life events',
   other: 'Other',
 };
-const GROUP_ORDER = Object.values(INTEREST_GROUPS);
+const PICKED_AT_SIGNUP = 'Picked when you joined';
+const GROUP_ORDER = [...Object.values(INTEREST_GROUPS), PICKED_AT_SIGNUP];
 
 export type PrefItem = {
   /** The thing itself: "Football", "Evening (8pm)". */
@@ -197,7 +198,8 @@ export type PrefItem = {
 export function groupInterests(interests: Interest[]): { label: string; items: PrefItem[] }[] {
   const byLabel = new Map<string, Map<string, PrefItem>>();
   for (const i of interests) {
-    const label = INTEREST_GROUPS[i.key] ?? 'Other';
+    // Signup chips are broad categories, kept apart from what ALINE learned.
+    const label = i.source === 'onboarding' ? PICKED_AT_SIGNUP : INTEREST_GROUPS[i.key] ?? 'Other';
     const { title, detail } = describeInterest(i.value as unknown);
     if (!title) continue;
     const key = title.toLowerCase();
