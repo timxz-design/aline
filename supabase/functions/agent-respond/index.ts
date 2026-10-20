@@ -104,6 +104,8 @@ type InterestRow = {
   value: unknown;
   confidence: number | null;
   source: string | null;
+  active: boolean;
+  evidence_days: string[] | null;
 };
 
 type GroupRow = {
@@ -202,6 +204,8 @@ type Extracted = {
   key: string;
   value: unknown;
   confidence?: number;
+  /** The user said it about themselves ("I love…"), not inferred from a plan. */
+  stated?: boolean;
 };
 
 // Anthropic message types
@@ -1009,13 +1013,20 @@ function buildSystemPromptBlocks(input: {
 
   // Onboarding chips ("Coffee / chill hangs") are broad categories tapped in
   // seconds at signup — weak hints. What they've said in chat outranks them.
-  const learned = interests.filter((i) => i.source !== 'onboarding');
+  const learned = interests.filter((i) => i.source !== 'onboarding' && i.active);
+  const candidates = interests.filter((i) => i.source !== 'onboarding' && !i.active);
   const picked = interests.filter((i) => i.source === 'onboarding');
   const interestLines =
     interests.length === 0
       ? 'None learned yet.'
       : [
           ...learned.map((i) => `  - ${i.key}: ${JSON.stringify(i.value)}`),
+          ...(candidates.length
+            ? [
+                `  Unconfirmed (came up once — a hint, NOT an established preference; don't tell them "you like X" based on these):`,
+                ...candidates.map((i) => `    · ${i.key}: ${JSON.stringify(i.value)}`),
+              ]
+            : []),
           ...(picked.length
             ? [
                 `  Picked at signup (broad categories, weak hints — what they've told you outranks these; don't treat them as stated preferences):`,
@@ -1626,9 +1637,11 @@ JSON array of NEW preferences/facts learned from THIS user message. Use [] if no
 {
   "key": "<one of: time_preference, venue_preference, activity_like, activity_dislike, social_preference, goal_update, group_preference, mood, life_event, other>",
   "value": <object or string>,
-  "confidence": <0.0-1.0>
+  "confidence": <0.0-1.0>,
+  "stated": <true only if they said it about themselves as a preference — "I love football", "I hate running in the heat", "I prefer mornings". false when you're inferring it from a plan, a request or something they did once>
 }
-Do NOT re-extract things already in "Known preferences".
+Planning or doing something is not liking it: "schedule deep work 9–11" is a plan, not a like — don't extract it as activity_like.
+Don't re-extract confirmed items in "Known preferences". DO extract an "Unconfirmed" item again when it comes up again — a repeat mention on another day is how it becomes confirmed.
 </extracted>`;
 
   const now = new Date();
@@ -1779,11 +1792,13 @@ Deno.serve(async (req: Request) => {
       .limit(20),
     supabase
       .from('interests')
-      .select('id, key, value, confidence, source')
+      // Unconfirmed candidates (active=false, mentioned on one day only) come
+      // too — labelled as such — so the agent can use them as hints and
+      // recognise a repeat mention.
+      .select('id, key, value, confidence, source, active, evidence_days')
       .eq('user_id', userId)
-      .eq('active', true)
       .order('updated_at', { ascending: false })
-      .limit(40),
+      .limit(60),
     supabase
       .from('group_members')
       .select('group_id, groups(id, name, group_type)')
@@ -2494,6 +2509,9 @@ Deno.serve(async (req: Request) => {
       key: e.key,
       value: (e.value as object | string | number | boolean | null) ?? null,
       confidence: typeof e.confidence === 'number' ? e.confidence : 0.7,
+      // Visible in the You tab only once stated or repeated on another day
+      // (interests_accumulate trigger); otherwise kept as a candidate.
+      stated: e.stated === true,
       source: 'chat',
     }));
     const { error: intErr } = await supabase.from('interests').insert(interestsToInsert);
