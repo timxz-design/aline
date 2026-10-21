@@ -90,7 +90,7 @@ export default function AgentScreen() {
   const listData = useMemo(() => [...visibleMessages].reverse(), [visibleMessages]);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyDay, setHistoryDay] = useState<string | null>(null);
-  const { byMessage: changeSetsByMessage } = useChangeSets();
+  const { byMessage: changeSetsByMessage, refresh: refreshChangeSets } = useChangeSets();
   const { byId: plansById } = useGoalPlans();
   const chatEventIds = useMemo(
     () => [...new Set(messages.flatMap((m) => m.event_ids ?? []))],
@@ -187,7 +187,10 @@ export default function AgentScreen() {
       .order('created_at', { ascending: true })
       .limit(50);
     addIncoming((data ?? []) as ChatMessage[]);
-  }, [user, addIncoming]);
+    // A proposal card is linked to its message a moment after the reply is
+    // saved; realtime can miss that update just like it misses replies.
+    refreshChangeSets();
+  }, [user, addIncoming, refreshChangeSets]);
 
   useEffect(() => {
     const sub = AppState.addEventListener('change', (s) => {

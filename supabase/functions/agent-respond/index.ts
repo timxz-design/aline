@@ -1223,7 +1223,9 @@ function buildSystemPromptBlocks(input: {
       : recentChanges
           .map(
             (c) =>
-              `  - ${c.status === 'accepted' ? '✓ accepted' : '✗ declined'} (${relTime(
+              `  - ${c.status === 'accepted' ? '✓ accepted'
+                : c.status === 'pending' ? '⏳ card waiting for their answer (they can tap Accept; or re-propose with apply=true, which replaces it)'
+                : '✗ declined'} (${relTime(
                 c.updated_at,
               )}): ${c.reasoning ?? 'a calendar change'}`,
           )
@@ -1719,7 +1721,10 @@ function parseClaudeText(text: string): { reply: string; extracted: Extracted[] 
   const replyMatch = text.match(/<reply>([\s\S]*?)<\/reply>/);
   const extractedMatch = text.match(/<extracted>([\s\S]*?)<\/extracted>/);
 
-  const reply = (replyMatch?.[1] ?? text).trim();
+  // Without <reply> tags the whole text is the reply — but the <extracted>
+  // block (and any stray tags) must never reach the user.
+  const reply = (replyMatch?.[1] ??
+    text.replace(/<extracted>[\s\S]*?(<\/extracted>|$)/g, '').replace(/<\/?reply>/g, '')).trim();
 
   let extracted: Extracted[] = [];
   if (extractedMatch?.[1]) {
@@ -1906,7 +1911,7 @@ Deno.serve(async (req: Request) => {
       .from('change_sets')
       .select('reasoning, status, updated_at')
       .eq('user_id', userId)
-      .in('status', ['accepted', 'rejected'])
+      .in('status', ['accepted', 'rejected', 'pending'])
       .gte('updated_at', new Date(Date.now() - 2 * 86_400_000).toISOString())
       .order('updated_at', { ascending: false })
       .limit(5),
@@ -3257,6 +3262,16 @@ async function executeTool(
     // Checked before anything is saved so the model can pick another time.
     const conflict = await findChangeSetConflict(supabase, userId, userTimezone, normalized);
     if (conflict) return { ok: false, message: conflict };
+
+    // The newest proposal replaces older unanswered ones: accepting a stale
+    // card later would put the same blocks in twice. (Sets from this same
+    // turn — e.g. today + tomorrow — are younger than this and stay.)
+    await supabase
+      .from('change_sets')
+      .update({ status: 'expired', updated_at: new Date().toISOString() })
+      .eq('user_id', userId)
+      .eq('status', 'pending')
+      .lt('created_at', new Date(Date.now() - 2 * 60_000).toISOString());
 
     const { data: inserted, error: insertErr } = await supabase
       .from('change_sets')
