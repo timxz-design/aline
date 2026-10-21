@@ -206,7 +206,31 @@ type Extracted = {
   confidence?: number;
   /** The user said it about themselves ("I love…"), not inferred from a plan. */
   stated?: boolean;
+  /** The user's own words backing `stated`, copied from their message. */
+  quote?: string;
 };
+
+// Only these keys are tastes that can be shown as "you like…" from a single
+// statement. Goal notes, moods, life events and "other" never are.
+const STATEABLE_KEYS = new Set([
+  'activity_like', 'activity_dislike', 'time_preference', 'venue_preference',
+  'social_preference', 'group_preference',
+]);
+// First person + a taste verb. "I want 8h of work split in two" is a request,
+// not a preference, and fails this.
+const PREFERENCE_RE =
+  /\b(i|i'm|im|i am)\b[^.!?]{0,40}\b(like|likes|love|loves|enjoy|prefer|hate|dislike|can't stand|cant stand|fan of|favou?rite|into)\b/i;
+
+const normText = (s: string) => s.toLowerCase().replace(/[’']/g, "'").replace(/\s+/g, ' ').trim();
+
+/** The model's `stated` flag is only trusted when it quotes the user's own
+ *  message and the quote really is a first-person preference. */
+function isVerifiedStatement(e: Extracted, userText: string): boolean {
+  if (e.stated !== true || !STATEABLE_KEYS.has(e.key)) return false;
+  const quote = typeof e.quote === 'string' ? normText(e.quote) : '';
+  if (quote.length < 4 || !normText(userText).includes(quote)) return false;
+  return PREFERENCE_RE.test(quote);
+}
 
 // Anthropic message types
 type ContentBlock =
@@ -1638,9 +1662,10 @@ JSON array of NEW preferences/facts learned from THIS user message. Use [] if no
   "key": "<one of: time_preference, venue_preference, activity_like, activity_dislike, social_preference, goal_update, group_preference, mood, life_event, other>",
   "value": <object or string>,
   "confidence": <0.0-1.0>,
-  "stated": <true only if they said it about themselves as a preference — "I love football", "I hate running in the heat", "I prefer mornings". false when you're inferring it from a plan, a request or something they did once>
+  "stated": <true only if they said it about themselves as a preference — "I love football", "I hate running in the heat", "I prefer mornings". false when you're inferring it from a plan, a request or something they did once>,
+  "quote": "<when stated is true: their exact words from this message, e.g. \"I love football\". Omit otherwise>"
 }
-Planning or doing something is not liking it: "schedule deep work 9–11" is a plan, not a like — don't extract it as activity_like.
+Planning or doing something is not liking it: "schedule deep work 9–11" or "I want 8 hours of work split in two blocks" is a plan/request for this schedule, not a like — don't extract it as a preference at all.
 Don't re-extract confirmed items in "Known preferences". DO extract an "Unconfirmed" item again when it comes up again — a repeat mention on another day is how it becomes confirmed.
 </extracted>`;
 
@@ -2511,7 +2536,7 @@ Deno.serve(async (req: Request) => {
       confidence: typeof e.confidence === 'number' ? e.confidence : 0.7,
       // Visible in the You tab only once stated or repeated on another day
       // (interests_accumulate trigger); otherwise kept as a candidate.
-      stated: e.stated === true,
+      stated: isVerifiedStatement(e, triggerMsg?.content ?? ''),
       source: 'chat',
     }));
     const { error: intErr } = await supabase.from('interests').insert(interestsToInsert);
