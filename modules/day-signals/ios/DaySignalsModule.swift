@@ -34,6 +34,21 @@ enum VisitStore {
     UserDefaults.standard.set(items, forKey: key)
   }
 
+  /// "Left this spot" observed by the stop fence (iOS never sent the visit's
+  /// departure). Uploaded like a visit that only has a departure.
+  static func appendDeparture(lat: Double, lon: Double, radius: Double, at: Date) {
+    var items = all()
+    items.append([
+      "lat": lat,
+      "lon": lon,
+      "accuracy": radius,
+      "recordedAt": Date().timeIntervalSince1970 * 1000,
+      "departure": at.timeIntervalSince1970 * 1000,
+    ])
+    if items.count > maxItems { items.removeFirst(items.count - maxItems) }
+    UserDefaults.standard.set(items, forKey: key)
+  }
+
   static func all() -> [[String: Double]] {
     return UserDefaults.standard.array(forKey: key) as? [[String: Double]] ?? []
   }
@@ -51,9 +66,18 @@ enum VisitStore {
 /// across app launches and relaunches the app in the background to deliver a
 /// visit; the app delegate subscriber below re-attaches this delegate at launch
 /// so those deliveries are caught.
+///
+/// Stop fence: iOS often reports arriving somewhere but never the departure,
+/// so short stops (lunch nearby) vanish. On every arrival we put one small
+/// exit-only region around the spot; leaving it wakes the app and records the
+/// departure. One fence at a time, identified by `stopRegionId` so it never
+/// touches the app's place geofences (expo-location).
 final class VisitMonitor: NSObject, CLLocationManagerDelegate {
   static let shared = VisitMonitor()
   static let enabledKey = "aline.visitMonitoringEnabled"
+  static let stopKey = "aline.stopFence"          // [lat, lon] of the armed fence
+  static let stopRegionId = "aline.stop"
+  static let stopRadius: CLLocationDistance = 100  // about the smallest iOS honours
   private var manager: CLLocationManager?
 
   func start() {
@@ -65,6 +89,7 @@ final class VisitMonitor: NSObject, CLLocationManagerDelegate {
         self.manager = m
       }
       self.manager?.startMonitoringVisits()
+      self.rearmStopFence()
     }
   }
 
@@ -72,6 +97,7 @@ final class VisitMonitor: NSObject, CLLocationManagerDelegate {
     UserDefaults.standard.set(false, forKey: VisitMonitor.enabledKey)
     DispatchQueue.main.async {
       self.manager?.stopMonitoringVisits()
+      self.clearStopFence()
     }
   }
 
@@ -81,6 +107,52 @@ final class VisitMonitor: NSObject, CLLocationManagerDelegate {
 
   func locationManager(_ manager: CLLocationManager, didVisit visit: CLVisit) {
     VisitStore.append(visit)
+    if visit.departureDate == Date.distantFuture {
+      armStopFence(lat: visit.coordinate.latitude, lon: visit.coordinate.longitude)
+    } else {
+      clearStopFence()  // iOS reported the departure itself
+    }
+  }
+
+  func locationManager(_ manager: CLLocationManager, didExitRegion region: CLRegion) {
+    // Region events reach every location manager in the app: only ours counts.
+    guard region.identifier == VisitMonitor.stopRegionId,
+          let circle = region as? CLCircularRegion else { return }
+    VisitStore.appendDeparture(lat: circle.center.latitude, lon: circle.center.longitude,
+                               radius: circle.radius, at: Date())
+    clearStopFence()
+  }
+
+  func locationManager(_ manager: CLLocationManager, monitoringDidFailFor region: CLRegion?, withError error: Error) {
+    if region?.identifier == VisitMonitor.stopRegionId { clearStopFence() }
+  }
+
+  private func armStopFence(lat: Double, lon: Double) {
+    guard let m = manager,
+          CLLocationManager.isMonitoringAvailable(for: CLCircularRegion.self) else { return }
+    let region = CLCircularRegion(center: CLLocationCoordinate2D(latitude: lat, longitude: lon),
+                                  radius: VisitMonitor.stopRadius, identifier: VisitMonitor.stopRegionId)
+    region.notifyOnEntry = false
+    region.notifyOnExit = true
+    m.startMonitoring(for: region)  // same identifier replaces the previous fence
+    UserDefaults.standard.set([lat, lon], forKey: VisitMonitor.stopKey)
+  }
+
+  /// The fence can be dropped by the system or by a geofence re-sync; put it
+  /// back on launch if we're still waiting for a departure.
+  private func rearmStopFence() {
+    guard let m = manager,
+          let c = UserDefaults.standard.array(forKey: VisitMonitor.stopKey) as? [Double], c.count == 2,
+          !m.monitoredRegions.contains(where: { $0.identifier == VisitMonitor.stopRegionId }) else { return }
+    armStopFence(lat: c[0], lon: c[1])
+  }
+
+  private func clearStopFence() {
+    UserDefaults.standard.removeObject(forKey: VisitMonitor.stopKey)
+    guard let m = manager else { return }
+    for r in m.monitoredRegions where r.identifier == VisitMonitor.stopRegionId {
+      m.stopMonitoring(for: r)
+    }
   }
 }
 

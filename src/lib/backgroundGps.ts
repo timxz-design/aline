@@ -278,6 +278,12 @@ TaskManager.defineTask(GEOFENCE_TASK, async ({ data, error }) => {
     eventType: Location.GeofencingEventType;
     region: Location.LocationRegion;
   };
+  // The native stop fence (see modules/day-signals) records the departure
+  // itself; if the event reaches us too, upload it right away.
+  if (eventType === Location.GeofencingEventType.Exit && region?.identifier === 'aline.stop') {
+    await syncVisits();
+    return;
+  }
   if (eventType !== Location.GeofencingEventType.Enter) return;
   if (region?.latitude == null || region?.longitude == null) return;
   await recordPing(
