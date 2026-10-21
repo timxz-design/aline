@@ -15,6 +15,7 @@ import { hasHealthAuthorization, isHealthAvailable, requestHealthAuthorization }
 import { useOnboarding } from '../../src/lib/onboarding-context';
 import { registerForPushNotifications } from '../../src/lib/push-notifications';
 import { ensureMotionPermission } from '../../src/lib/signals';
+import { readPermissionStates, type PermissionKey, type PermissionState } from '../../src/lib/permission-status';
 import { useProfile } from '../../src/lib/use-profile';
 import { colors, font, radius, space } from '../../src/theme';
 
@@ -26,8 +27,8 @@ import { colors, font, radius, space } from '../../src/theme';
  * gets a tap-through to Settings.
  */
 
-type ItemState = 'on' | 'partial' | 'off';
-type Key = 'location' | 'calendar' | 'motion' | 'health' | 'notifications';
+type ItemState = PermissionState;
+type Key = PermissionKey;
 
 const ITEMS: { key: Key; title: string; why: string }[] = [
   {
@@ -57,25 +58,7 @@ const ITEMS: { key: Key; title: string; why: string }[] = [
   },
 ];
 
-async function readStates(): Promise<Record<Key, ItemState>> {
-  const [fg, bg, cal, motion, notif, healthOn] = await Promise.all([
-    Location.getForegroundPermissionsAsync().catch(() => null),
-    Location.getBackgroundPermissionsAsync().catch(() => null),
-    Calendar.getCalendarPermissionsAsync().catch(() => null),
-    Pedometer.getPermissionsAsync().catch(() => null),
-    Notifications.getPermissionsAsync().catch(() => null),
-    // HealthKit never reveals read-access status; this is our own record of
-    // the user having completed the Health sheet.
-    hasHealthAuthorization(),
-  ]);
-  return {
-    location: bg?.granted ? 'on' : fg?.granted ? 'partial' : 'off',
-    calendar: cal?.granted ? 'on' : 'off',
-    motion: motion?.granted ? 'on' : 'off',
-    health: healthOn ? 'on' : 'off',
-    notifications: notif?.granted ? 'on' : 'off',
-  };
-}
+const readStates = readPermissionStates;
 
 export default function OnboardingPermissions() {
   const router = useRouter();
