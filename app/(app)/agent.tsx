@@ -27,7 +27,6 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { AgentChangeSetCard } from '../../src/components/AgentChangeSetCard';
 import { ChatHistorySheet } from '../../src/components/ChatHistorySheet';
 import { GoalPlanCard } from '../../src/components/GoalPlanCard';
 import { ImageViewer } from '../../src/components/ImageViewer';
@@ -39,7 +38,6 @@ import { DayStrip } from '../../src/components/DayStrip';
 import { Screen } from '../../src/components/Screen';
 import { useAuth } from '../../src/lib/auth-context';
 import { supabase } from '../../src/lib/supabase';
-import { useChangeSets, type PendingChangeSet } from '../../src/lib/use-change-sets';
 import { useProfile } from '../../src/lib/use-profile';
 import type { ChatMessage } from '../../src/types/database';
 import { colors, font, radius, space } from '../../src/theme';
@@ -90,7 +88,6 @@ export default function AgentScreen() {
   const listData = useMemo(() => [...visibleMessages].reverse(), [visibleMessages]);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyDay, setHistoryDay] = useState<string | null>(null);
-  const { byMessage: changeSetsByMessage, refresh: refreshChangeSets } = useChangeSets();
   const { byId: plansById } = useGoalPlans();
   const chatEventIds = useMemo(
     () => [...new Set(messages.flatMap((m) => m.event_ids ?? []))],
@@ -187,10 +184,7 @@ export default function AgentScreen() {
       .order('created_at', { ascending: true })
       .limit(50);
     addIncoming((data ?? []) as ChatMessage[]);
-    // A proposal card is linked to its message a moment after the reply is
-    // saved; realtime can miss that update just like it misses replies.
-    refreshChangeSets();
-  }, [user, addIncoming, refreshChangeSets]);
+  }, [user, addIncoming]);
 
   useEffect(() => {
     const sub = AppState.addEventListener('change', (s) => {
@@ -463,7 +457,6 @@ export default function AgentScreen() {
         renderMessage={(item) => (
           <Bubble
             msg={item}
-            changeSet={changeSetsByMessage[item.id]}
             plan={item.goal_plan_id ? plansById[item.goal_plan_id] : undefined}
             highlighted={item.id === focus}
             // no onImagePress: iOS can't present the image viewer over this sheet
@@ -534,7 +527,6 @@ export default function AgentScreen() {
             renderItem={({ item }) => (
               <Bubble
                 msg={item}
-                changeSet={changeSetsByMessage[item.id]}
                 plan={item.goal_plan_id ? plansById[item.goal_plan_id] : undefined}
                 highlighted={item.id === highlightId}
                 onPromptDifferentTime={setDraft}
@@ -708,7 +700,6 @@ function Separator() {
 
 const Bubble = memo(function Bubble({
   msg,
-  changeSet,
   plan,
   highlighted,
   onPromptDifferentTime,
@@ -719,7 +710,6 @@ const Bubble = memo(function Bubble({
   onEventChanged,
 }: {
   msg: ChatMessage;
-  changeSet?: PendingChangeSet;
   plan?: LoadedPlan;
   highlighted?: boolean;
   onPromptDifferentTime?: (s: string) => void;
@@ -789,12 +779,6 @@ const Bubble = memo(function Bubble({
             <Text selectable style={styles.bubbleText}>{renderRich(msg.content, false)}</Text>
           </View>
         </View>
-        {changeSet ? (
-          <AgentChangeSetCard
-            changeSet={changeSet}
-            onPromptDifferentTime={onPromptDifferentTime}
-          />
-        ) : null}
         {planCard}
         {eventCards}
       </View>
@@ -824,12 +808,6 @@ const Bubble = memo(function Bubble({
           ) : null}
         </View>
       </View>
-      {changeSet ? (
-        <AgentChangeSetCard
-          changeSet={changeSet}
-          onPromptDifferentTime={onPromptDifferentTime}
-        />
-      ) : null}
       {planCard}
     </View>
   );

@@ -506,23 +506,14 @@ const TOOLS = [
   {
     name: 'propose_change_set',
     description:
-      "Propose a bundle of calendar operations the user can accept or reject as one atomic unit. NEVER apply changes directly to the calendar — always go through this. Operations are 'move' (shift an existing movable event) and 'create' (add a new event). The user sees a card in chat with three buttons: Accept all / Different time / Cancel. Always include a clear, friendly summary_for_user explaining the WHOLE bundle in one short sentence — not technical details, just the human-readable plan ('Move your gym Wed → Thu so dinner with Marko fits Wed evening').",
+      "Change the user's calendar: a bundle of 'move' (shift an existing movable event) and 'create' (add a new event) operations, saved together IMMEDIATELY — there is no confirmation card. Only call it when the user asked for this change or said yes to your suggestion in chat; if it's your own idea, ask in your reply first and call it after they agree. The result lists exactly what was saved — confirm from that. Include a short summary_for_user of the whole bundle ('Move your gym Wed → Thu so dinner with Marko fits Wed evening').",
     input_schema: {
       type: 'object',
       properties: {
         summary_for_user: {
           type: 'string',
           description:
-            "One short sentence the user will see at the top of the proposal card, explaining the whole bundle.",
-        },
-        apply: {
-          type: 'boolean',
-          description:
-            "Set TRUE to apply the change immediately with NO confirmation card — use this when " +
-            "${firstName} EXPLICITLY asked for this specific change (e.g. 'schedule a haircut Thursday 2pm', " +
-            "'move my gym to 7pm'). Set FALSE (or omit) when YOU are suggesting or autonomously " +
-            "reorganizing/rescheduling (e.g. shuffling blocks for a delay, mood, or conflict) — then the " +
-            "user gets an Accept/Reject card. Rule of thumb: user directed it → apply:true; you decided it → apply:false.",
+            "One short sentence describing the whole bundle (kept as the change's history note).",
         },
         operations: {
           type: 'array',
@@ -531,7 +522,7 @@ const TOOLS = [
           items: {
             type: 'object',
             description:
-              "Either a 'move' op (op='move', event_id, new_start, new_end) or a 'create' op (op='create', title, start_at, end_at, event_type). All times are ISO 8601 LOCAL (no Z, no offset). event_type for create must be 'flexible' (default for self-blocks like reading time) or 'goal' (for goal-tied blocks like a planned run). Optional 'reasoning' on each op shows up next to the op in the card.",
+              "Either a 'move' op (op='move', event_id, new_start, new_end) or a 'create' op (op='create', title, start_at, end_at, event_type). All times are ISO 8601 LOCAL (no Z, no offset). event_type for create must be 'flexible' (default for self-blocks like reading time) or 'goal' (for goal-tied blocks like a planned run). Optional 'reasoning' on each op is kept with the change.",
           },
         },
       },
@@ -1224,7 +1215,7 @@ function buildSystemPromptBlocks(input: {
           .map(
             (c) =>
               `  - ${c.status === 'accepted' ? '✓ accepted'
-                : c.status === 'pending' ? '⏳ card waiting for their answer (they can tap Accept; or re-propose with apply=true, which replaces it)'
+                : c.status === 'pending' ? '⏳ old card, not applied'
                 : '✗ declined'} (${relTime(
                 c.updated_at,
               )}): ${c.reasoning ?? 'a calendar change'}`,
@@ -1333,17 +1324,19 @@ You learn from every conversation. You represent ${firstName} when their agent t
   if making dinner requires moving a gym block, both go in the SAME change set.
   Summary_for_user is what the user reads first — keep it conversational.
 
-  **apply vs. confirm (important):**
-  - If ${firstName} EXPLICITLY asked for this specific change — "schedule a haircut
-    Thursday 2pm", "add a 1h run tomorrow morning", "move my gym to 7pm" — set
-    **apply: true**. It happens immediately, NO card. Just confirm in your reply
-    ("Done — haircut Thursday at 2pm."). Don't make them approve what they just asked for.
-  - If YOU are suggesting it or reorganizing autonomously — reshuffling for a delay,
-    a conflict, their mood/energy, or a plan-my-day where you chose the layout — set
-    **apply: false** (or omit). They get an Accept/Reject card, because the initiative
-    was yours, not theirs.
-  - When unsure, prefer apply:false (ask). A reschedule the user explicitly requested
-    is apply:true; a reschedule you initiated is apply:false.
+  **It saves immediately — there are no confirmation cards. So:**
+  - ${firstName} asked for it ("schedule a haircut Thursday 2pm", "plan tomorrow like
+    today", "move my gym to 7pm") → just do it, then confirm what was saved
+    ("Done — work 8:30–12:30, lunch 12:30, gym 15:00…"). Don't make them approve what
+    they just asked for. A layout you chose for a plan they requested counts as asked.
+  - Your OWN idea (reshuffling for a delay, a conflict, their energy, a missed session)
+    → describe it in your reply and ask ("Want me to move gym to Saturday 10:00?").
+    Call the tool only after they say yes.
+  - Confirm from the tool result's \`applied\` list — the exact titles and times that
+    were saved — never from what you meant to do. If it returns an error, nothing
+    changed; say so.
+  - "Undo" / "change X" → make the inverse change (move it back, or cancel_calendar_event
+    for blocks you added).
 
   **Blocks never overlap.** Check find_open_slots first; never put a block on top of
   another (two things at 17:00 is not "back-to-back"). **A missed goal session is
@@ -1361,7 +1354,7 @@ You learn from every conversation. You represent ${firstName} when their agent t
   ops in ONE change set (up to 12) — don't drip them one at a time. Place blocks
   in the real free gaps (respect existing events, routines, transit, and the
   sleep/wake window above), give each a clear title and time, and explain the
-  shape of the day in summary_for_user. One card, one approval, whole day laid out.
+  shape of the day in summary_for_user. One change, whole day laid out.
 
 - **set_reminder / cancel_reminder** — A reminder is a push NUDGE at a time, not
   a calendar block. "Remind me to send that email at 4" → set_reminder (applies
@@ -1600,9 +1593,8 @@ Learned patterns (fused from schedule + location over time — what usually happ
 predict and fill in likely locations, e.g. "your workout's probably at home"):
 ${patternLines}
 
-Recently acted-on proposals (you proposed these; the user tapped a card — there's no chat
-message for it, so rely on this). Acknowledge accepted ones as DONE and don't re-propose them;
-respect declined ones:
+Recent calendar changes (applied ✓ are already on the calendar — don't redo them; older
+cards from before chat-only confirmations may show as declined/waiting — ignore those):
 ${changeLines}
 
 Live activity status (right now / just passed — inferred from location, may be wrong, so check
@@ -3223,6 +3215,7 @@ async function executeTool(
           event_id: eventId,
           new_start: newStart,
           new_end: newEnd,
+          title: ev.title,
           reasoning: op.reasoning ? String(op.reasoning) : undefined,
         });
       } else if (kind === 'create') {
@@ -3288,40 +3281,31 @@ async function executeTool(
       return { ok: false, message: `failed to persist change set: ${insertErr?.message ?? 'unknown'}` };
     }
 
-    // Apply-immediately mode: the user explicitly asked for THIS exact change, so
-    // skip the confirmation card and apply it now. (Autonomous reorganizes leave
-    // it pending → the user gets a card.)
-    if (input.apply === true) {
-      const { error: applyErr } = await supabase.rpc('apply_change_set', { _id: inserted.id });
-      if (applyErr) {
-        // Fall back to a pending proposal so nothing is lost.
-        return {
-          ok: true,
-          message: JSON.stringify({
-            change_set_id: inserted.id,
-            operations_count: normalized.length,
-            applied: false,
-            note: `could not auto-apply (${applyErr.message}); left as a proposal card`,
-          }),
-        };
-      }
-      return {
-        ok: true,
-        message: JSON.stringify({
-          change_set_id: inserted.id,
-          operations_count: normalized.length,
-          applied: true,
-          note: 'Applied directly (user-requested) — no card needed; confirm in your reply.',
-        }),
-      };
+    // No confirmation cards: the agent only calls this once the user asked for
+    // the change or said yes in chat, so it applies right away. The reply must
+    // confirm from `applied` below — what was actually saved — not from intent.
+    const { error: applyErr } = await supabase.rpc('apply_change_set', { _id: inserted.id });
+    if (applyErr) {
+      await supabase.from('change_sets')
+        .update({ status: 'expired', updated_at: new Date().toISOString() })
+        .eq('id', inserted.id);
+      return { ok: false, message: `nothing changed — could not apply: ${applyErr.message}` };
     }
-
+    const hm = (iso: string) => new Date(iso).toLocaleString('en-GB', {
+      timeZone: userTimezone, weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
+    });
+    const hmOnly = (iso: string) => new Date(iso).toLocaleTimeString('en-GB', {
+      timeZone: userTimezone, hour: '2-digit', minute: '2-digit',
+    });
+    const applied = normalized.map((op) => op.op === 'move'
+      ? `moved "${op.title}" → ${hm(String(op.new_start))}–${hmOnly(String(op.new_end))}`
+      : `added "${op.title}" ${hm(String(op.start_at))}–${hmOnly(String(op.end_at))}`);
     return {
       ok: true,
       message: JSON.stringify({
         change_set_id: inserted.id,
-        operations_count: normalized.length,
-        expires_at: inserted.expires_at,
+        applied,
+        note: 'Saved to the calendar. Confirm in your reply using exactly these titles and times.',
       }),
     };
   }
