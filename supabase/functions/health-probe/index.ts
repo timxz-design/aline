@@ -7,6 +7,7 @@
  */
 // @ts-nocheck Deno edge runtime
 import { createClient } from 'jsr:@supabase/supabase-js@2';
+import Anthropic from 'npm:@anthropic-ai/sdk@0.135.0';
 
 const CRON_SECRET = Deno.env.get('CRON_SECRET');
 const PLACES_KEY = Deno.env.get('GOOGLE_PLACES_API_KEY') ?? Deno.env.get('GOOGLE_MAPS_API_KEY');
@@ -46,29 +47,38 @@ Deno.serve(async (req) => {
       if (j.status !== 'OK' || el?.status !== 'OK') throw new Error(`${j.status} ${el?.status ?? ''} ${j.error_message ?? ''}`);
       return el.duration?.text ?? 'ok';
     }),
-    // Anthropic: the agent itself — a tiny real request with the agent's model
-    // and settings (incl. a tool), so a rejected config shows up here, not as
-    // users' messages going unanswered.
+    // Anthropic: the agent itself — the same SDK streaming call with the
+    // agent's model and settings, through one full tool round (assistant turn
+    // passed back verbatim), so a rejected config shows up here, not as users'
+    // messages going unanswered.
     check('anthropic', async () => {
       if (!ANTHROPIC_KEY) throw new Error('no key configured');
       const model = Deno.env.get('ANTHROPIC_MODEL') ?? 'claude-sonnet-5-5';
-      const r = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01' },
-        body: JSON.stringify({
-          model,
-          max_tokens: 64,
-          ...(model.startsWith('claude-sonnet-5-5')
-            ? { thinking: { type: 'between_tools' }, output_config: { effort: 'medium' } }
-            : {}),
-          tools: [{ name: 'ping', description: 'Health check tool. Do not call.', input_schema: { type: 'object', properties: {} } }],
-          messages: [{ role: 'user', content: 'Reply with the word ok.' }],
-        }),
-      });
-      const j = await r.json();
-      if (!r.ok) throw new Error(`HTTP ${r.status}: ${JSON.stringify(j.error ?? j).slice(0, 200)}`);
-      const text = (j.content ?? []).filter((b) => b.type === 'text').map((b) => b.text).join('');
-      return `${model}: ${text.slice(0, 20)}`;
+      const anthropic = new Anthropic({ apiKey: ANTHROPIC_KEY });
+      const params = {
+        model,
+        max_tokens: 256,
+        ...(model.startsWith('claude-sonnet-5-5')
+          ? { thinking: { type: 'between_tools' }, output_config: { effort: 'medium' } }
+          : {}),
+        tools: [{ name: 'ping', description: 'Health check tool. Returns pong.', input_schema: { type: 'object', properties: {} } }],
+      };
+      const messages = [{ role: 'user', content: 'Call the ping tool once, then reply with the word ok.' }];
+      let deltas = 0;
+      let rounds = 0;
+      for (; rounds < 3; rounds++) {
+        const stream = anthropic.messages.stream({ ...params, messages });
+        stream.on('text', () => deltas++);
+        const msg = await stream.finalMessage();
+        const calls = msg.content.filter((b) => b.type === 'tool_use');
+        if (msg.stop_reason !== 'tool_use' || calls.length === 0) {
+          const text = msg.content.filter((b) => b.type === 'text').map((b) => b.text).join('');
+          return `${model}: ${text.slice(0, 20)} (rounds ${rounds + 1}, deltas ${deltas})`;
+        }
+        messages.push({ role: 'assistant', content: msg.content });
+        messages.push({ role: 'user', content: calls.map((c) => ({ type: 'tool_result', tool_use_id: c.id, content: 'pong' })) });
+      }
+      throw new Error('no final answer after 3 rounds');
     }),
   ]);
 

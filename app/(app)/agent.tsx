@@ -37,6 +37,7 @@ import { useGoalPlans, commitGoalPlan, type LoadedPlan } from '../../src/lib/use
 import { DayStrip } from '../../src/components/DayStrip';
 import { Screen } from '../../src/components/Screen';
 import { useAuth } from '../../src/lib/auth-context';
+import { streamAgentReply } from '../../src/lib/agent-stream';
 import { supabase } from '../../src/lib/supabase';
 import { useProfile } from '../../src/lib/use-profile';
 import type { ChatMessage } from '../../src/types/database';
@@ -56,6 +57,9 @@ import { colors, font, radius, space } from '../../src/theme';
  * If the edge function fails (no API key, network, etc.) we surface a
  * recoverable inline error so the user knows something went wrong.
  */
+// Key of the temporary bubble that shows a reply while it's being written.
+const STREAMING_ID = '__streaming';
+
 export default function AgentScreen() {
   const { user } = useAuth();
   const { profile } = useProfile();
@@ -85,7 +89,20 @@ export default function AgentScreen() {
   // the bottom, so the list rests on the newest message by itself. No more
   // scrollToEnd on every content/layout change — that fought the user's finger
   // (twitching) and landed short of the end when rows weren't measured yet.
-  const listData = useMemo(() => [...visibleMessages].reverse(), [visibleMessages]);
+  // While the agent writes, its text so far shows as a temporary bubble at the
+  // bottom — until the saved reply arrives (it may land before the stream ends).
+  const [streamText, setStreamText] = useState('');
+  const listData = useMemo(() => {
+    const rows = [...visibleMessages].reverse();
+    if (!streamText || rows[0]?.role === 'agent') return rows;
+    const live = {
+      id: STREAMING_ID,
+      role: 'agent',
+      content: streamText,
+      created_at: new Date().toISOString(),
+    } as ChatMessage;
+    return [live, ...rows];
+  }, [visibleMessages, streamText]);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyDay, setHistoryDay] = useState<string | null>(null);
   const { byId: plansById } = useGoalPlans();
@@ -333,18 +350,14 @@ export default function AgentScreen() {
     // Your own message always brings you down (offset 0 = bottom, inverted).
     requestAnimationFrame(() => listRef.current?.scrollToOffset({ offset: 0, animated: true }));
 
-    // 2) Ask the agent. The edge function inserts the reply server-side;
-    //    realtime subscription will deliver it.
+    // 2) Ask the agent. Its text streams into a temporary bubble; the edge
+    //    function saves the finished reply server-side.
     setThinking(true);
     try {
-      const { error: fnError } = await supabase.functions.invoke('agent-respond', {
-        body: { user_message_id: inserted.id },
-      });
-      if (fnError) {
-        console.warn('agent-respond failed:', fnError);
-        setError(
-          'Your agent is offline right now. Check that ANTHROPIC_API_KEY is set in Supabase secrets.'
-        );
+      const res = await streamAgentReply(inserted.id, setStreamText);
+      if (!res.ok) {
+        console.warn('agent-respond failed:', res.error);
+        setError('Your agent is offline right now. Try again in a moment.');
       }
     } catch (e) {
       console.warn('agent-respond threw:', e);
@@ -353,6 +366,7 @@ export default function AgentScreen() {
       // The reply is in the table by the time the call returns; don't rely on
       // realtime to have delivered it.
       await catchUp().catch(() => {});
+      setStreamText('');
       setThinking(false);
     }
   };
@@ -570,7 +584,7 @@ export default function AgentScreen() {
           </Pressable>
         ) : null}
 
-        {thinking ? (
+        {thinking && !streamText ? (
           <View style={styles.thinkingRow}>
             <ActivityIndicator size="small" color={colors.accent} />
             <Text style={styles.thinkingText}>ALINE is thinking…</Text>

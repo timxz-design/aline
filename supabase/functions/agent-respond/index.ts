@@ -25,6 +25,7 @@
 
 // @ts-expect-error — Deno-only deps; this file runs in Supabase Edge Runtime.
 import { createClient } from 'jsr:@supabase/supabase-js@2';
+import Anthropic from 'npm:@anthropic-ai/sdk@0.135.0';
 import { decodeGeohash, mapsConfigured, resolveOrigin, travelTimes } from '../_shared/maps.ts';
 import { activityToTypes, placesConfigured, searchPlaceByText, searchVenues, type VenueCandidate } from '../_shared/places-search.ts';
 
@@ -255,6 +256,7 @@ const THINKING_PARAMS: Record<string, unknown> = MODEL.startsWith('claude-sonnet
   : {};
 // @ts-expect-error
 const ANTHROPIC_API_KEY = Deno.env.get('ANTHROPIC_API_KEY');
+const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY ?? '' });
 // @ts-expect-error
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 // @ts-expect-error
@@ -475,7 +477,7 @@ const TOOLS = [
   {
     name: 'find_open_slots',
     description:
-      "Find open time slots in the user's calendar within a window. Use this BEFORE proposing any calendar change so you know what's actually free vs blocked. Returns slots classified as 'none' (truly empty), 'flexible' (occupied by movable events the user has agreed can be reshuffled), or 'fixed' slots are silently skipped. When a slot is 'flexible', conflicting_events tells you what would need to be moved — you can then build a propose_change_set with both a 'move' op and a 'create' op together.",
+      "Find open time slots in the user's calendar within a window. Not needed for the next 7 days — those are in 'This week' in your context, and propose_change_set rejects overlaps itself. Use it for windows beyond that, or when the user asks when they're free. Returns slots classified as 'none' (truly empty), 'flexible' (occupied by movable events the user has agreed can be reshuffled), or 'fixed' slots are silently skipped. When a slot is 'flexible', conflicting_events tells you what would need to be moved — you can then build a propose_change_set with both a 'move' op and a 'create' op together.",
     input_schema: {
       type: 'object',
       properties: {
@@ -790,63 +792,31 @@ const TOOLS = [
     },
   },
   {
-    name: 'answer_schedule_suggestion',
+    name: 'answer_my_question',
     description:
-      "Record the user's answer to a plan change YOU suggested in chat (\"Your last 3 strength sessions were around 14:00, not 17:00 — move future sessions to 14:00–15:00?\"), listed under 'Open questions you asked'. accept=true re-times the plan and moves its future sessions; accept=false keeps the plan (not re-suggested for 30 days). If they want a DIFFERENT time than suggested, decline this and use the goal-plan tools instead.",
+      "Record the user's answer to a question YOU asked in chat — listed under 'Open questions you asked', each with its kind and id. " +
+      "kind=activity_check (\"did you get your strength training in yesterday?\"): answer done / elsewhere (pass label, e.g. 'park') / skipped — use this instead of mark_goal_done when the answer is about an open question. " +
+      "kind=place (\"is the place you've been 5 times your gym?\"): answer confirm / relabel (pass label, e.g. 'office', 'Ana's flat') / not_a_place; set category whenever the answer implies one. " +
+      "kind=routine (\"you're usually at X on Tuesdays 18:00–19:30 — plan around it?\"): answer confirm / reject. " +
+      "kind=plan_change (\"move future strength sessions to 14:00?\"): answer accept (re-times the plan and its future sessions) / decline (not re-suggested for 30 days); if they want a DIFFERENT time, decline and use the goal-plan tools.",
     input_schema: {
       type: 'object',
       properties: {
-        suggestion_id: { type: 'string', description: "The id from 'Open questions you asked'." },
-        accept: { type: 'boolean' },
-      },
-      required: ['suggestion_id', 'accept'],
-    },
-  },
-  {
-    name: 'answer_activity_check',
-    description:
-      "Record the user's answer to an activity question YOU asked in chat (\"Did you get your strength training in yesterday?\") — see 'Open questions you asked'. done = they did it as planned; elsewhere = did it but somewhere else (pass actual_label, e.g. 'park'); skipped = didn't do it. Use this instead of mark_goal_done when the answer is about an open question.",
-    input_schema: {
-      type: 'object',
-      properties: {
-        check_id: { type: 'string', description: "The id from 'Open questions you asked'." },
-        result: { type: 'string', enum: ['done', 'elsewhere', 'skipped'] },
-        actual_label: { type: 'string', description: "Optional: where/what they actually did, for 'elsewhere'." },
-      },
-      required: ['check_id', 'result'],
-    },
-  },
-  {
-    name: 'answer_place_question',
-    description:
-      "Record the user's answer to a place question YOU asked (\"is the place you've been 5 times your gym?\"). confirm = your guess is right; relabel = they told you what it really is (pass label, e.g. 'office', 'Ana's flat'); not_a_place = it isn't meaningful / stop tracking it.",
-    input_schema: {
-      type: 'object',
-      properties: {
-        place_id: { type: 'string', description: "The id from 'Open questions you asked'." },
-        answer: { type: 'string', enum: ['confirm', 'relabel', 'not_a_place'] },
-        label: { type: 'string', description: "Required for 'relabel'." },
+        kind: { type: 'string', enum: ['activity_check', 'place', 'routine', 'plan_change'] },
+        id: { type: 'string', description: "The id from 'Open questions you asked'." },
+        answer: {
+          type: 'string',
+          enum: ['done', 'elsewhere', 'skipped', 'confirm', 'relabel', 'not_a_place', 'reject', 'accept', 'decline'],
+        },
+        label: { type: 'string', description: "activity_check 'elsewhere': where/what they did. place 'relabel': what it really is." },
         category: {
           type: 'string',
           enum: ['home', 'work', 'education', 'gym', 'food', 'social', 'shopping', 'outdoors', 'other'],
           description:
-            "What KIND of place it is, from the meaning of their answer in any language ('my office' → work, 'moj dom' / 'Zuhause' → home, 'faks' → education). Set it whenever the answer implies one: schedules, activity checks and free-time logic rely on the category, not the name.",
+            "place only: what KIND of place it is, from the meaning of their answer in any language ('my office' → work, 'moj dom' / 'Zuhause' → home, 'faks' → education). Schedules, activity checks and free-time logic rely on the category, not the name.",
         },
       },
-      required: ['place_id', 'answer'],
-    },
-  },
-  {
-    name: 'answer_routine_question',
-    description:
-      "Record the user's answer to a routine question YOU asked (\"you're usually at X on Tuesdays 18:00–19:30 — should I plan around it?\"). confirm = yes, it's a regular thing; reject = no, don't treat it as a routine.",
-    input_schema: {
-      type: 'object',
-      properties: {
-        routine_id: { type: 'string', description: "The id from 'Open questions you asked'." },
-        answer: { type: 'string', enum: ['confirm', 'reject'] },
-      },
-      required: ['routine_id', 'answer'],
+      required: ['kind', 'id', 'answer'],
     },
   },
   {
@@ -1280,6 +1250,11 @@ You learn from every conversation. You represent ${firstName} when their agent t
 
 # Tools you have
 
+Each tool round adds a few seconds before ${firstName} sees anything. Use what
+your context already shows instead of looking it up again, and when you need
+several independent things (weather + travel time, two lookups), call those
+tools together in the same turn.
+
 - **find_mutual_slots** — Find slots where everyone is free (the user plus
   named friends, or all members of one of their groups). Privacy-preserving;
   returns free/busy windows only, never event details. ALWAYS call this first
@@ -1317,7 +1292,10 @@ You learn from every conversation. You represent ${firstName} when their agent t
 - **find_open_slots** — Read-only. Slot finder for ${firstName}'s OWN
   calendar only. Returns 'none' / 'flexible' classification (the multi-user
   find_mutual_slots is preferred for hangouts). Use this when ${firstName}
-  asks about THEIR availability for solo blocks (gym, study, reading).
+  asks about THEIR availability, or to plan beyond the next 7 days. Within the
+  next 7 days you already see every block in "This week" — place solo blocks
+  directly from that; don't spend a round on this tool first. (Anything with
+  OTHER people still goes through find_mutual_slots — you can't see their week.)
 
 - **propose_change_set** — Move things or add new blocks to ${firstName}'s
   calendar. NEVER write to the calendar another way. Compose changes atomically:
@@ -1338,7 +1316,7 @@ You learn from every conversation. You represent ${firstName} when their agent t
   - "Undo" / "change X" → make the inverse change (move it back, or cancel_calendar_event
     for blocks you added).
 
-  **Blocks never overlap.** Check find_open_slots first; never put a block on top of
+  **Blocks never overlap.** Read the free gaps in "This week"; never put a block on top of
   another (two things at 17:00 is not "back-to-back"). **A missed goal session is
   never doubled up**: if the target day already has a session of the same goal, don't
   add a second one — say it's covered by that session, or offer a day without one.
@@ -1709,6 +1687,43 @@ Don't re-extract confirmed items in "Known preferences". DO extract an "Unconfir
 }
 
 // ---------- response parsing ----------------------------------------------
+/** Passes on only the part of the streamed text inside <reply>…</reply>, as
+ *  it arrives. Holds back a few characters so a half-received closing tag is
+ *  never shown. Text outside the tags (and <extracted>) never reaches the app. */
+function replyFilter(out: (text: string) => void) {
+  let buf = '';
+  let start = -1;
+  let sent = 0;
+  let done = false;
+  let emitted = false;
+  return {
+    push(delta: string) {
+      if (done) return;
+      buf += delta;
+      if (start < 0) {
+        const i = buf.indexOf('<reply>');
+        if (i < 0) return;
+        start = sent = i + '<reply>'.length;
+      }
+      const close = buf.indexOf('</reply>', start);
+      const end = close >= 0 ? close : Math.max(sent, buf.length - '</reply>'.length);
+      if (end > sent) {
+        let chunk = buf.slice(sent, end);
+        if (!emitted) chunk = chunk.replace(/^\s+/, '');
+        if (chunk) {
+          out(chunk);
+          emitted = true;
+        }
+        sent = end;
+      }
+      if (close >= 0) done = true;
+    },
+    get emitted() {
+      return emitted;
+    },
+  };
+}
+
 function parseClaudeText(text: string): { reply: string; extracted: Extracted[] } {
   const replyMatch = text.match(/<reply>([\s\S]*?)<\/reply>/);
   const extractedMatch = text.match(/<extracted>([\s\S]*?)<\/extracted>/);
@@ -1736,8 +1751,46 @@ function parseClaudeText(text: string): { reply: string; extracted: Extracted[] 
 }
 
 // ---------- handler -------------------------------------------------------
+// The app asks for { stream: true }: the reply then arrives as server-sent
+// events — `delta` (reply text as it's written), `reset` (drop what was shown;
+// a tool round followed) and finally `done` with the same JSON the plain call
+// returns. The reply is saved to chat_messages either way; older app builds
+// keep using the plain JSON call.
+type StreamEvent = { type: 'delta'; text: string } | { type: 'reset' };
+type Emit = (ev: StreamEvent) => void;
+
 // @ts-expect-error
 Deno.serve(async (req: Request) => {
+  let wantsStream = false;
+  if (req.method === 'POST') {
+    try {
+      wantsStream = (await req.clone().json())?.stream === true;
+    } catch { /* handleAgent reports the bad body */ }
+  }
+  if (!wantsStream) return handleAgent(req, null);
+
+  const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
+  const writer = writable.getWriter();
+  const enc = new TextEncoder();
+  const send = (event: string, data: unknown) =>
+    writer.write(enc.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)).catch(() => {});
+  (async () => {
+    try {
+      const res = await handleAgent(req, (ev) => send(ev.type, ev));
+      const payload = await res.json().catch(() => ({}));
+      await send('done', { status: res.status, ...payload });
+    } catch (err) {
+      await send('done', { status: 500, error: err instanceof Error ? err.message : String(err) });
+    } finally {
+      await writer.close().catch(() => {});
+    }
+  })();
+  return new Response(readable, {
+    headers: { ...CORS_HEADERS, 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' },
+  });
+});
+
+async function handleAgent(req: Request, emit: Emit | null): Promise<Response> {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: CORS_HEADERS });
   }
@@ -2166,11 +2219,11 @@ Deno.serve(async (req: Request) => {
   const openQuestionLines = [
     ...((openChecksRes.data ?? []) as unknown as { id: string; scheduled_start: string; calendar_events: { title: string | null } | null }[]).map(
       (c) =>
-        `  - activity check id ${c.id}: did they do "${c.calendar_events?.title ?? 'the activity'}" on ${new Date(c.scheduled_start).toLocaleString('en-GB', { timeZone: tz, weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}? → answer_activity_check`,
+        `  - activity check id ${c.id}: did they do "${c.calendar_events?.title ?? 'the activity'}" on ${new Date(c.scheduled_start).toLocaleString('en-GB', { timeZone: tz, weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}? → answer_my_question kind=activity_check`,
     ),
     ...((openPlacesRes.data ?? []) as { id: string; name: string | null; user_label: string | null; visit_count: number }[]).map(
       (pl) =>
-        `  - place id ${pl.id}: you asked whether it's ${pl.user_label ?? pl.name ?? '(unnamed — you asked what it is)'} (${pl.visit_count} visits) → answer_place_question`,
+        `  - place id ${pl.id}: you asked whether it's ${pl.user_label ?? pl.name ?? '(unnamed — you asked what it is)'} (${pl.visit_count} visits) → answer_my_question kind=place`,
     ),
     ...((openRoutinesRes.data ?? []) as unknown as {
       id: string;
@@ -2180,7 +2233,7 @@ Deno.serve(async (req: Request) => {
       places: { name: string | null; user_label: string | null } | null;
     }[]).map(
       (r) =>
-        `  - routine id ${r.id}: at ${r.places?.user_label ?? r.places?.name ?? 'a place'} on ${r.day_of_week != null ? DOW[r.day_of_week] : '?'} ${hm(r.start_minute)}–${hm(r.end_minute)} — a regular thing? → answer_routine_question`,
+        `  - routine id ${r.id}: at ${r.places?.user_label ?? r.places?.name ?? 'a place'} on ${r.day_of_week != null ? DOW[r.day_of_week] : '?'} ${hm(r.start_minute)}–${hm(r.end_minute)} — a regular thing? → answer_my_question kind=routine`,
     ),
   ];
   for (const sgg of (openSuggestionsRes.data ?? []) as {
@@ -2192,7 +2245,7 @@ Deno.serve(async (req: Request) => {
     to_duration: number;
   }[]) {
     openQuestionLines.push(
-      `  - plan change id ${sgg.id}: move "${sgg.session_activity}" from ${sgg.from_start} (${sgg.from_duration} min) to ${sgg.to_start} (${sgg.to_duration} min)? → answer_schedule_suggestion`,
+      `  - plan change id ${sgg.id}: move "${sgg.session_activity}" from ${sgg.from_start} (${sgg.from_duration} min) to ${sgg.to_start} (${sgg.to_duration} min)? → answer_my_question kind=plan_change`,
     );
   }
   const openQuestionsBlock =
@@ -2301,6 +2354,8 @@ Deno.serve(async (req: Request) => {
   }
 
   // -------- agentic loop --------
+  // Streamed: the reply text reaches the app as it's written (when it asked
+  // for a stream), the rest of each round is collected by finalMessage().
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
   let totalCacheCreationTokens = 0;
@@ -2308,16 +2363,22 @@ Deno.serve(async (req: Request) => {
   const totalStart = Date.now();
   const toolsExecuted: Array<{ name: string; input: Record<string, unknown>; result: string; ok: boolean }> = [];
   let finalText = '';
+  const addUsage = (u: Anthropic.Usage | undefined) => {
+    totalInputTokens += u?.input_tokens ?? 0;
+    totalOutputTokens += u?.output_tokens ?? 0;
+    totalCacheCreationTokens += u?.cache_creation_input_tokens ?? 0;
+    totalCacheReadTokens += u?.cache_read_input_tokens ?? 0;
+  };
+  let streamedSomething = false;
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-    const claudeRes = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
+    // A round that ends in tool calls may have shown text the next round
+    // replaces — tell the app to clear it.
+    if (streamedSomething) emit?.({ type: 'reset' });
+    const filter = replyFilter((text) => emit?.({ type: 'delta', text }));
+    let claudeData: Anthropic.Message;
+    try {
+      const stream = anthropic.messages.stream({
         model: MODEL,
         // Short chat turns. Thinking off (Sonnet 5.5's lowest setting): replies
         // stay as fast and cheap as before, and between-tool notes come back as
@@ -2327,35 +2388,18 @@ Deno.serve(async (req: Request) => {
         system: systemArray,
         tools: TOOLS,
         messages,
-      }),
-    });
-
-    if (!claudeRes.ok) {
-      const errText = await claudeRes.text();
-      console.error('Anthropic error:', claudeRes.status, errText);
-      return jsonRes(
-        { error: `Anthropic API error: ${claudeRes.status}`, detail: errText },
-        502
-      );
+      } as unknown as Anthropic.MessageStreamParams);
+      if (emit) stream.on('text', (delta) => filter.push(delta));
+      claudeData = await stream.finalMessage();
+    } catch (err) {
+      const status = err instanceof Anthropic.APIError ? err.status ?? 502 : 502;
+      console.error('Anthropic error:', status, err instanceof Error ? err.message : err);
+      return jsonRes({ error: `Anthropic API error: ${status}`, detail: String(err) }, 502);
     }
+    streamedSomething = filter.emitted;
+    addUsage(claudeData.usage);
 
-    const claudeData = (await claudeRes.json()) as {
-      content?: ContentBlock[];
-      stop_reason?: string;
-      usage?: {
-        input_tokens?: number;
-        output_tokens?: number;
-        cache_creation_input_tokens?: number;
-        cache_read_input_tokens?: number;
-      };
-    };
-
-    totalInputTokens += claudeData.usage?.input_tokens ?? 0;
-    totalOutputTokens += claudeData.usage?.output_tokens ?? 0;
-    totalCacheCreationTokens += claudeData.usage?.cache_creation_input_tokens ?? 0;
-    totalCacheReadTokens += claudeData.usage?.cache_read_input_tokens ?? 0;
-
-    const blocks = claudeData.content ?? [];
+    const blocks = claudeData.content as unknown as ContentBlock[];
     const textBlocks = blocks.filter((b): b is { type: 'text'; text: string } => b.type === 'text');
     const toolUseBlocks = blocks.filter(
       (b): b is { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> } =>
@@ -2402,14 +2446,10 @@ Deno.serve(async (req: Request) => {
   // text turn — the user would see "(no response)" even though tools ran. Force
   // one last text-only turn so the user always gets told what happened.
   if (!finalText.trim()) {
-    const finalRes = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
+    if (streamedSomething) emit?.({ type: 'reset' });
+    const filter = replyFilter((text) => emit?.({ type: 'delta', text }));
+    try {
+      const stream = anthropic.messages.stream({
         model: MODEL,
         max_tokens: 2048,
         ...THINKING_PARAMS,
@@ -2417,20 +2457,17 @@ Deno.serve(async (req: Request) => {
         tools: TOOLS,
         tool_choice: { type: 'none' },
         messages,
-      }),
-    });
-    if (finalRes.ok) {
-      const finalData = (await finalRes.json()) as {
-        content?: ContentBlock[];
-        usage?: { input_tokens?: number; output_tokens?: number };
-      };
-      totalInputTokens += finalData.usage?.input_tokens ?? 0;
-      totalOutputTokens += finalData.usage?.output_tokens ?? 0;
-      finalText = (finalData.content ?? [])
-        .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
+      } as unknown as Anthropic.MessageStreamParams);
+      if (emit) stream.on('text', (delta) => filter.push(delta));
+      const finalData = await stream.finalMessage();
+      addUsage(finalData.usage);
+      finalText = finalData.content
+        .filter((b): b is Anthropic.TextBlock => b.type === 'text')
         .map((b) => b.text)
         .join('\n')
         .trim();
+    } catch (err) {
+      console.warn('final text turn failed:', err instanceof Error ? err.message : err);
     }
   }
 
@@ -2550,7 +2587,7 @@ Deno.serve(async (req: Request) => {
     },
     200
   );
-});
+}
 
 // ---------- timezone helpers ----------------------------------------------
 /**
@@ -2741,6 +2778,28 @@ async function executeTool(
   input: Record<string, unknown>,
   triggerImageUrl: string | null = null
 ): Promise<{ ok: boolean; message: string }> {
+  // One tool for answering ALINE's own questions; the per-kind handlers below
+  // do the recording.
+  if (name === 'answer_my_question') {
+    const kind = String(input.kind ?? '');
+    const id = String(input.id ?? '');
+    const answer = String(input.answer ?? '');
+    if (kind === 'plan_change') {
+      name = 'answer_schedule_suggestion';
+      input = { suggestion_id: id, accept: answer === 'accept' };
+    } else if (kind === 'activity_check') {
+      name = 'answer_activity_check';
+      input = { check_id: id, result: answer, actual_label: input.label };
+    } else if (kind === 'place') {
+      name = 'answer_place_question';
+      input = { place_id: id, answer, label: input.label, category: input.category };
+    } else if (kind === 'routine') {
+      name = 'answer_routine_question';
+      input = { routine_id: id, answer };
+    } else {
+      return { ok: false, message: `unknown kind: ${kind}` };
+    }
+  }
   if (name === 'propose_hangout') {
     const groupId = input.group_id ? String(input.group_id) : '';
     const directHandle = input.direct_friend_handle
