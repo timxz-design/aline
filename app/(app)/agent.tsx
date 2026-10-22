@@ -37,6 +37,7 @@ import { useGoalPlans, commitGoalPlan, type LoadedPlan } from '../../src/lib/use
 import { DayStrip } from '../../src/components/DayStrip';
 import { Screen } from '../../src/components/Screen';
 import { useAuth } from '../../src/lib/auth-context';
+import { useShareIntentContext } from 'expo-share-intent';
 import { streamAgentReply } from '../../src/lib/agent-stream';
 import { supabase } from '../../src/lib/supabase';
 import { useProfile } from '../../src/lib/use-profile';
@@ -370,6 +371,21 @@ export default function AgentScreen() {
       setThinking(false);
     }
   };
+
+  // ---- Shared from another app (Share → ALINE) ----
+  // A screenshot (a training schedule from a team chat) is sent straight to the
+  // agent, which reads it and asks before adding anything. Shared text lands in
+  // the composer so it can be checked or explained before sending.
+  const { hasShareIntent, shareIntent, resetShareIntent } = useShareIntentContext();
+  useEffect(() => {
+    if (!hasShareIntent || !user || loading) return;
+    const image = shareIntent.files?.find((f) => f.mimeType?.startsWith('image/'));
+    const text = (shareIntent.text ?? '').trim();
+    resetShareIntent();
+    if (image) sendText(text, false, image.path);
+    else if (text) setDraft((d) => (d ? `${d}\n\n${text}` : text));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasShareIntent, user, loading]);
 
   // ---- Voice input (on-device STT) ----
   // Dictation, not auto-send: recognition keeps listening through pauses until

@@ -1,4 +1,5 @@
 import { Stack } from 'expo-router';
+import { ShareIntentProvider } from 'expo-share-intent';
 import { StatusBar } from 'expo-status-bar';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -13,6 +14,9 @@ initSentry();
 
 export default function RootLayout() {
   return (
+    // Outermost provider: something shared to ALINE from another app (a
+    // training schedule screenshot, a pasted message) is picked up by the chat.
+    <ShareIntentProvider>
     <GestureHandlerRootView style={{ flex: 1, backgroundColor: colors.bg }}>
       <SafeAreaProvider>
         <AuthProvider>
@@ -31,5 +35,6 @@ export default function RootLayout() {
         </AuthProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>
+    </ShareIntentProvider>
   );
 }
