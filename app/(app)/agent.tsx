@@ -265,7 +265,7 @@ export default function AgentScreen() {
       if (res.canceled || !res.assets?.[0]?.uri) return;
       await sendText(draft, false, res.assets[0].uri);
     };
-    Alert.alert('Add a photo', 'An event poster, flyer, or screenshot — ALINE reads the details.', [
+    Alert.alert('Add a photo', 'A training or work schedule, an event poster, or a screenshot — ALINE reads the details.', [
       { text: 'Take photo', onPress: () => pick(true) },
       { text: 'Choose from library', onPress: () => pick(false) },
       { text: 'Cancel', style: 'cancel' },

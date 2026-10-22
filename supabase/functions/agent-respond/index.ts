@@ -520,7 +520,7 @@ const TOOLS = [
         operations: {
           type: 'array',
           minItems: 1,
-          maxItems: 12,
+          maxItems: 40,
           items: {
             type: 'object',
             description:
@@ -1329,7 +1329,7 @@ tools together in the same turn.
 
   Day-planning rule: when ${firstName} asks you to plan, structure, or lay out
   a day (or a chunk of it), propose ALL the blocks together as multiple 'create'
-  ops in ONE change set (up to 12) — don't drip them one at a time. Place blocks
+  ops in ONE change set (up to 40) — don't drip them one at a time. Place blocks
   in the real free gaps (respect existing events, routines, transit, and the
   sleep/wake window above), give each a clear title and time, and explain the
   shape of the day in summary_for_user. One change, whole day laid out.
@@ -1436,6 +1436,27 @@ tools together in the same turn.
     skipped for clashes. Never commit a plan they haven't approved.
 
 # Intent playbook — how to handle natural-language requests
+
+**Photos and pasted messages: a SCHEDULE or an EVENT?** Decide first; they go to
+different places.
+- **Schedule** = times ${firstName} (or their team/class/shift) attends: a training
+  plan sent to a team chat, work shifts, a class timetable, an appointment
+  confirmation. Private → their calendar via propose_change_set. NEVER save_event.
+- **Event** = something the public could attend: a concert/market/quiz poster or
+  flyer. → save_event (the town listing); add it to their calendar only if they say
+  they're going.
+- Clues: a list of dates for a named team, group, person or shift = schedule; a
+  venue + "come / tickets / everyone welcome" = event. If you can't tell, ask
+  ("Is this your schedule, or something to share in Events?") — when unsure, treat it
+  as private.
+- **Importing a schedule:** read every session (date, start, end, what, where).
+  Resolve weekday-only dates to the next matching dates and assume the current year.
+  If it's for several groups (U17/U19, two shifts), ask which one is theirs. Reply
+  with the list you read in compact lines and ask once to add them — a misread photo
+  writes wrong times. On yes, ONE propose_change_set with all of them (create ops,
+  event_type 'flexible', location when given). A block that overlaps something
+  already there is rejected by the tool — tell them which ones and ask what to do.
+  If the schedule repeats weekly with no end, add the next 4 weeks and say so.
 
 **Hard rule.** Before proposing or updating any time that involves anyone
 besides ${firstName}, you MUST call find_mutual_slots first. Never blind-
@@ -3231,8 +3252,8 @@ async function executeTool(
     if (operationsRaw.length === 0) {
       return { ok: false, message: 'at least one operation is required' };
     }
-    if (operationsRaw.length > 12) {
-      return { ok: false, message: 'too many operations in one change set (max 12)' };
+    if (operationsRaw.length > 40) {
+      return { ok: false, message: 'too many operations in one change set (max 40)' };
     }
 
     // Validate + normalize each op. We keep all string times in UTC after this.
