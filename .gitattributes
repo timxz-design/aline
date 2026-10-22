@@ -1,0 +1,2 @@
+# patch-package patches must keep LF line endings or they fail to apply on the (Linux) build servers
+*.patch text eol=lf
