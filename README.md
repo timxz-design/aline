@@ -6,6 +6,19 @@ You talk to ALINE in a chat. It knows your calendar, your goals, where you usual
 
 iOS app (Expo / React Native) · Supabase (Postgres, Edge Functions, pg_cron) · Claude as the agent.
 
+<table>
+  <tr>
+    <td align="center"><img src="docs/screenshots/agent-chat.jpg" width="250" alt="Planning a day by chat with the agent"></td>
+    <td align="center"><img src="docs/screenshots/my-week.jpg" width="250" alt="The week view with planned and moved blocks"></td>
+    <td align="center"><img src="docs/screenshots/you.jpg" width="250" alt="What ALINE has learned about you"></td>
+  </tr>
+  <tr>
+    <td align="center"><b>Plan by chat</b><br>One message becomes a full day; follow-ups like "move to 3:30" just work.</td>
+    <td align="center"><b>My Week</b><br>The plan, colour-coded by type, with changes marked.</td>
+    <td align="center"><b>You</b><br>What ALINE has learned (sleep, places, likes, goals) and who can plan with you.</td>
+  </tr>
+</table>
+
 ---
 
 ## What it does
