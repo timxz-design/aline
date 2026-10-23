@@ -1708,6 +1708,31 @@ Don't re-extract confirmed items in "Known preferences". DO extract an "Unconfir
 }
 
 // ---------- response parsing ----------------------------------------------
+/** A short line for the live bubble while tools run, from what's being done. */
+function toolStatus(names: string[]): string {
+  const say: Record<string, string> = {
+    find_mutual_slots: 'Checking when everyone is free…',
+    find_open_slots: 'Looking at your week…',
+    propose_change_set: 'Updating your calendar…',
+    cancel_calendar_event: 'Updating your calendar…',
+    get_weather: 'Checking the weather…',
+    get_travel_time: 'Checking travel time…',
+    find_venue: 'Looking for places…',
+    find_group_venue: 'Looking for places…',
+    find_events: "Looking at what's on…",
+    save_event: 'Saving the event…',
+    propose_hangout: 'Setting up the plan…',
+    update_hangout: 'Updating the plan…',
+    invite_to_hangout: 'Sending the invite…',
+    send_calendar_invite: 'Sending the invite…',
+    set_reminder: 'Setting the reminder…',
+    save_goal_plan: 'Drafting your plan…',
+    commit_goal_plan: 'Adding your plan to the calendar…',
+    get_friend_schedule: 'Looking at their week…',
+  };
+  return say[names.find((n) => say[n]) ?? ''] ?? 'Working on it…';
+}
+
 /** Passes on only the part of the streamed text inside <reply>…</reply>, as
  *  it arrives. Holds back a few characters so a half-received closing tag is
  *  never shown. Text outside the tags (and <extracted>) never reaches the app. */
@@ -2390,13 +2415,32 @@ async function handleAgent(req: Request, emit: Emit | null): Promise<Response> {
     totalCacheCreationTokens += u?.cache_creation_input_tokens ?? 0;
     totalCacheReadTokens += u?.cache_read_input_tokens ?? 0;
   };
-  let streamedSomething = false;
+  // What the app's live bubble currently shows: a status line while tools run
+  // ("Looking at your week…"), then the reply as it's written. Whatever is on
+  // screen is cleared (reset) the moment the next real text starts.
+  let showing = false;
+  const show = (text: string) => {
+    if (!emit) return;
+    if (showing) emit({ type: 'reset' });
+    emit({ type: 'delta', text });
+    showing = true;
+  };
+  const streamText = () => {
+    let started = false;
+    return replyFilter((text) => {
+      if (!started && showing) emit?.({ type: 'reset' });
+      if (!started && !firstTextMs) firstTextMs = Date.now() - totalStart;
+      started = true;
+      showing = true;
+      emit?.({ type: 'delta', text });
+    });
+  };
+  let firstTextMs = 0;
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     // A round that ends in tool calls may have shown text the next round
     // replaces — tell the app to clear it.
-    if (streamedSomething) emit?.({ type: 'reset' });
-    const filter = replyFilter((text) => emit?.({ type: 'delta', text }));
+    const filter = streamText();
     let claudeData: Anthropic.Message;
     try {
       const stream = anthropic.messages.stream({
@@ -2417,7 +2461,6 @@ async function handleAgent(req: Request, emit: Emit | null): Promise<Response> {
       console.error('Anthropic error:', status, err instanceof Error ? err.message : err);
       return jsonRes({ error: `Anthropic API error: ${status}`, detail: String(err) }, 502);
     }
-    streamedSomething = filter.emitted;
     addUsage(claudeData.usage);
 
     const blocks = claudeData.content as unknown as ContentBlock[];
@@ -2433,6 +2476,8 @@ async function handleAgent(req: Request, emit: Emit | null): Promise<Response> {
       // Done — Claude is finished thinking.
       break;
     }
+
+    show(toolStatus(toolUseBlocks.map((t) => t.name)));
 
     // Execute each tool call and collect results.
     const toolResults: ContentBlock[] = [];
@@ -2467,8 +2512,7 @@ async function handleAgent(req: Request, emit: Emit | null): Promise<Response> {
   // text turn — the user would see "(no response)" even though tools ran. Force
   // one last text-only turn so the user always gets told what happened.
   if (!finalText.trim()) {
-    if (streamedSomething) emit?.({ type: 'reset' });
-    const filter = replyFilter((text) => emit?.({ type: 'delta', text }));
+    const filter = streamText();
     try {
       const stream = anthropic.messages.stream({
         model: MODEL,
@@ -2493,6 +2537,7 @@ async function handleAgent(req: Request, emit: Emit | null): Promise<Response> {
   }
 
   const totalLatency = Date.now() - totalStart;
+  if (emit) console.log(`[stream] first reply text at ${firstTextMs}ms, model done at ${totalLatency}ms`);
   const { reply, extracted } = parseClaudeText(finalText);
 
   // Resolve the goal-plan link BEFORE inserting, so the row carries goal_plan_id
