@@ -998,7 +998,10 @@ function buildSystemPromptBlocks(input: {
 
   // Onboarding chips ("Coffee / chill hangs") are broad categories tapped in
   // seconds at signup — weak hints. What they've said in chat outranks them.
-  const learned = interests.filter((i) => i.source !== 'onboarding' && i.active);
+  // Goal notes are history, not preferences: dated, newest few per goal, and
+  // marked when old so a note from months ago isn't read as today's life.
+  const isGoalNote = (i: InterestRow) => i.key === 'goal_update';
+  const learned = interests.filter((i) => i.source !== 'onboarding' && i.active && !isGoalNote(i));
   const candidates = interests.filter((i) => i.source !== 'onboarding' && !i.active);
   const picked = interests.filter((i) => i.source === 'onboarding');
   const interestLines =
@@ -1012,6 +1015,7 @@ function buildSystemPromptBlocks(input: {
                 ...candidates.map((i) => `    · ${i.key}: ${JSON.stringify(i.value)}`),
               ]
             : []),
+          ...goalNoteLines(interests.filter(isGoalNote)),
           ...(picked.length
             ? [
                 `  Picked at signup (broad categories, weak hints — what they've told you outranks these; don't treat them as stated preferences):`,
@@ -1659,6 +1663,7 @@ JSON array of NEW preferences/facts learned from THIS user message. Use [] if no
   "quote": "<when stated is true: their exact words from this message, e.g. \"I love football\". Omit otherwise>"
 }
 Planning or doing something is not liking it: "schedule deep work 9–11" or "I want 8 hours of work split in two blocks" is a plan/request for this schedule, not a like — don't extract it as a preference at all.
+When they say a goal or focus has changed or no longer applies ("I'm not doing outreach now", "paused the business for exams"), extract a goal_update for that goal with the new status and context — the newest note replaces the old ones in what you see.
 Don't re-extract confirmed items in "Known preferences". DO extract an "Unconfirmed" item again when it comes up again — a repeat mention on another day is how it becomes confirmed.
 </extracted>`;
 
@@ -1708,6 +1713,33 @@ Don't re-extract confirmed items in "Known preferences". DO extract an "Unconfir
 }
 
 // ---------- response parsing ----------------------------------------------
+/** Goal notes for the prompt: newest 3 per goal, each with its date; notes
+ *  older than 30 days are flagged so the agent doesn't treat them as current. */
+function goalNoteLines(notes: InterestRow[]): string[] {
+  if (notes.length === 0) return [];
+  const noteDay = (i: InterestRow) => (i.evidence_days ?? []).slice(-1)[0] ?? '';
+  const byGoal = new Map<string, InterestRow[]>();
+  for (const n of [...notes].sort((a, b) => noteDay(b).localeCompare(noteDay(a)))) {
+    const v = n.value as { goal?: string } | null;
+    const goal = (typeof v === 'object' && v?.goal ? v.goal : 'other').toLowerCase();
+    const list = byGoal.get(goal) ?? [];
+    if (list.length < 3) list.push(n);
+    byGoal.set(goal, list);
+  }
+  const monthAgo = new Date(Date.now() - 30 * 86_400_000).toISOString().slice(0, 10);
+  const lines = [
+    `  Goal notes (what they said at the time, newest first — the latest note wins; an OLD note is history, not what they're doing now):`,
+  ];
+  for (const list of byGoal.values()) {
+    for (const n of list) {
+      const day = noteDay(n);
+      const old = day && day < monthAgo ? ' — OLD, may no longer apply' : '';
+      lines.push(`    · [${day || 'undated'}${old}] ${JSON.stringify(n.value)}`);
+    }
+  }
+  return lines;
+}
+
 /** A short line for the live bubble while tools run, from what's being done. */
 function toolStatus(names: string[]): string {
   const say: Record<string, string> = {
@@ -2006,6 +2038,9 @@ async function handleAgent(req: Request, emit: Emit | null): Promise<Response> {
       .select('activity_key, day_of_week, time_bucket, place_id, count, confidence, places(name, user_label)')
       .eq('user_id', userId)
       .gte('confidence', 0.5)
+      // A habit needs repeats: one occurrence (a block planned once in July)
+      // is not "usually".
+      .gte('count', 2)
       .order('count', { ascending: false })
       .limit(30),
     // Recently acted-on change sets — so the agent knows what the user accepted
