@@ -1,8 +1,9 @@
 /**
  * Ask the agent for a reply and receive its text as it's written.
  *
- * agent-respond answers `{ stream: true }` with server-sent events: `delta`
- * (more reply text), `reset` (drop what was shown — a tool round followed) and
+ * agent-respond answers `{ stream: true }` with server-sent events: `status`
+ * (what it's doing: "Updating your calendar…"), `delta` (more reply text),
+ * `reset` (drop what was shown — a tool round followed) and
  * `done` (the same result the plain call returns). The finished reply is
  * saved to chat_messages either way, so the chat loads it like any other
  * message; the streamed text only fills the bubble while it's being written.
@@ -19,6 +20,7 @@ const FUNCTION_URL = `${process.env.EXPO_PUBLIC_SUPABASE_URL}/functions/v1/agent
 export async function streamAgentReply(
   userMessageId: string,
   onText: (textSoFar: string) => void,
+  onStatus: (status: string) => void = () => {},
 ): Promise<{ ok: boolean; error?: string }> {
   const { data: { session } } = await supabase.auth.getSession();
   if (!session) return { ok: false, error: 'not signed in' };
@@ -59,6 +61,8 @@ export async function streamAgentReply(
       if (event === 'delta' && payload.text) {
         text += payload.text;
         onText(text);
+      } else if (event === 'status' && payload.text) {
+        onStatus(payload.text);
       } else if (event === 'reset') {
         text = '';
         onText('');

@@ -1733,12 +1733,13 @@ function toolStatus(names: string[]): string {
   return say[names.find((n) => say[n]) ?? ''] ?? 'Working on it…';
 }
 
-/** Passes on only the part of the streamed text inside <reply>…</reply>, as
- *  it arrives. Holds back a few characters so a half-received closing tag is
- *  never shown. Text outside the tags (and <extracted>) never reaches the app. */
-function replyFilter(out: (text: string) => void) {
+/** Passes the streamed reply text on as it arrives, without the format tags:
+ *  `<reply>`/`</reply>` are dropped and everything from `<extracted>` on is
+ *  never shown. Works whether or not the model used the tags (it often skips
+ *  them). Holds back a few characters so a half-received tag never shows. */
+function replyFilter(out: (text: string) => void, reset: () => void) {
+  const HOLD = '<extracted>'.length;
   let buf = '';
-  let start = -1;
   let sent = 0;
   let done = false;
   let emitted = false;
@@ -1746,13 +1747,17 @@ function replyFilter(out: (text: string) => void) {
     push(delta: string) {
       if (done) return;
       buf += delta;
-      if (start < 0) {
-        const i = buf.indexOf('<reply>');
-        if (i < 0) return;
-        start = sent = i + '<reply>'.length;
+      // Text before an opening <reply> was preamble: drop what was shown.
+      const open = buf.indexOf('<reply>');
+      if (open >= 0) {
+        if (emitted) reset();
+        buf = buf.slice(open + '<reply>'.length);
+        sent = 0;
+        emitted = false;
       }
-      const close = buf.indexOf('</reply>', start);
-      const end = close >= 0 ? close : Math.max(sent, buf.length - '</reply>'.length);
+      buf = buf.replace('</reply>', '');
+      const stop = buf.indexOf('<extracted>');
+      const end = stop >= 0 ? stop : Math.max(sent, buf.length - HOLD);
       if (end > sent) {
         let chunk = buf.slice(sent, end);
         if (!emitted) chunk = chunk.replace(/^\s+/, '');
@@ -1762,7 +1767,14 @@ function replyFilter(out: (text: string) => void) {
         }
         sent = end;
       }
-      if (close >= 0) done = true;
+      if (stop >= 0) done = true;
+    },
+    /** End of the round: show what's still held back (no <extracted> came). */
+    flush() {
+      if (done || buf.length <= sent) return;
+      const chunk = buf.slice(sent).replace(/\s+$/, '');
+      if (chunk) out(chunk);
+      sent = buf.length;
     },
     get emitted() {
       return emitted;
@@ -1802,7 +1814,7 @@ function parseClaudeText(text: string): { reply: string; extracted: Extracted[] 
 // a tool round followed) and finally `done` with the same JSON the plain call
 // returns. The reply is saved to chat_messages either way; older app builds
 // keep using the plain JSON call.
-type StreamEvent = { type: 'delta'; text: string } | { type: 'reset' };
+type StreamEvent = { type: 'delta'; text: string } | { type: 'reset' } | { type: 'status'; text: string };
 type Emit = (ev: StreamEvent) => void;
 
 // @ts-expect-error
@@ -2415,16 +2427,11 @@ async function handleAgent(req: Request, emit: Emit | null): Promise<Response> {
     totalCacheCreationTokens += u?.cache_creation_input_tokens ?? 0;
     totalCacheReadTokens += u?.cache_read_input_tokens ?? 0;
   };
-  // What the app's live bubble currently shows: a status line while tools run
-  // ("Looking at your week…"), then the reply as it's written. Whatever is on
-  // screen is cleared (reset) the moment the next real text starts.
+  // While tools run the app shows a status line in place of "ALINE is
+  // thinking…" ("Updating your calendar…"); the reply streams into its bubble.
+  // Reply text from a round that then called tools is cleared (reset).
   let showing = false;
-  const show = (text: string) => {
-    if (!emit) return;
-    if (showing) emit({ type: 'reset' });
-    emit({ type: 'delta', text });
-    showing = true;
-  };
+  const show = (text: string) => emit?.({ type: 'status', text });
   const streamText = () => {
     let started = false;
     return replyFilter((text) => {
@@ -2433,7 +2440,7 @@ async function handleAgent(req: Request, emit: Emit | null): Promise<Response> {
       started = true;
       showing = true;
       emit?.({ type: 'delta', text });
-    });
+    }, () => emit?.({ type: 'reset' }));
   };
   let firstTextMs = 0;
 
@@ -2456,6 +2463,7 @@ async function handleAgent(req: Request, emit: Emit | null): Promise<Response> {
       } as unknown as Anthropic.MessageStreamParams);
       if (emit) stream.on('text', (delta) => filter.push(delta));
       claudeData = await stream.finalMessage();
+      if (claudeData.stop_reason !== 'tool_use') filter.flush();
     } catch (err) {
       const status = err instanceof Anthropic.APIError ? err.status ?? 502 : 502;
       console.error('Anthropic error:', status, err instanceof Error ? err.message : err);
@@ -2525,6 +2533,7 @@ async function handleAgent(req: Request, emit: Emit | null): Promise<Response> {
       } as unknown as Anthropic.MessageStreamParams);
       if (emit) stream.on('text', (delta) => filter.push(delta));
       const finalData = await stream.finalMessage();
+      filter.flush();
       addUsage(finalData.usage);
       finalText = finalData.content
         .filter((b): b is Anthropic.TextBlock => b.type === 'text')

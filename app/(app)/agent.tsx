@@ -93,6 +93,8 @@ export default function AgentScreen() {
   // While the agent writes, its text so far shows as a temporary bubble at the
   // bottom — until the saved reply arrives (it may land before the stream ends).
   const [streamText, setStreamText] = useState('');
+  // What the agent is doing while it works ("Updating your calendar…").
+  const [agentStatus, setAgentStatus] = useState('');
   const listData = useMemo(() => {
     const rows = [...visibleMessages].reverse();
     if (!streamText || rows[0]?.role === 'agent') return rows;
@@ -355,7 +357,7 @@ export default function AgentScreen() {
     //    function saves the finished reply server-side.
     setThinking(true);
     try {
-      const res = await streamAgentReply(inserted.id, setStreamText);
+      const res = await streamAgentReply(inserted.id, setStreamText, setAgentStatus);
       if (!res.ok) {
         console.warn('agent-respond failed:', res.error);
         setError('Your agent is offline right now. Try again in a moment.');
@@ -368,6 +370,7 @@ export default function AgentScreen() {
       // realtime to have delivered it.
       await catchUp().catch(() => {});
       setStreamText('');
+      setAgentStatus('');
       setThinking(false);
     }
   };
@@ -603,7 +606,7 @@ export default function AgentScreen() {
         {thinking && !streamText ? (
           <View style={styles.thinkingRow}>
             <ActivityIndicator size="small" color={colors.accent} />
-            <Text style={styles.thinkingText}>ALINE is thinking…</Text>
+            <Text style={styles.thinkingText}>{agentStatus || 'ALINE is thinking…'}</Text>
           </View>
         ) : null}
 
