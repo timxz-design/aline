@@ -50,3 +50,6 @@ yarn-error.*
 
 # Launch-video output (7.5MB of generated artifacts, regenerate with /brag)
 brag-output/
+
+# Supabase CLI local state (linked project ref)
+supabase/.temp/
