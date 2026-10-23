@@ -58,9 +58,6 @@ import { colors, font, radius, space } from '../../src/theme';
  * If the edge function fails (no API key, network, etc.) we surface a
  * recoverable inline error so the user knows something went wrong.
  */
-// Key of the temporary bubble that shows a reply while it's being written.
-const STREAMING_ID = '__streaming';
-
 export default function AgentScreen() {
   const { user } = useAuth();
   const { profile } = useProfile();
@@ -91,21 +88,27 @@ export default function AgentScreen() {
   // scrollToEnd on every content/layout change — that fought the user's finger
   // (twitching) and landed short of the end when rows weren't measured yet.
   // While the agent writes, its text so far shows as a temporary bubble at the
-  // bottom — until the saved reply arrives (it may land before the stream ends).
+  // bottom. When the saved reply arrives it takes over the bubble's list key,
+  // so the bubble just settles instead of being swapped (which made it jump).
   const [streamText, setStreamText] = useState('');
   // What the agent is doing while it works ("Updating your calendar…").
   const [agentStatus, setAgentStatus] = useState('');
+  // The message the agent is answering right now.
+  const [pendingFor, setPendingFor] = useState<{ id: string; created_at: string } | null>(null);
+  const keyAliasRef = useRef(new Map<string, string>());
   const listData = useMemo(() => {
     const rows = [...visibleMessages].reverse();
-    if (!streamText || rows[0]?.role === 'agent') return rows;
-    const live = {
-      id: STREAMING_ID,
-      role: 'agent',
-      content: streamText,
-      created_at: new Date().toISOString(),
-    } as ChatMessage;
+    if (!pendingFor) return rows;
+    const liveKey = `live-${pendingFor.id}`;
+    const reply = rows.find((m) => m.role === 'agent' && (m.created_at ?? '') > pendingFor.created_at);
+    if (reply) {
+      keyAliasRef.current.set(reply.id, liveKey);
+      return rows;
+    }
+    if (!streamText) return rows;
+    const live = { id: liveKey, role: 'agent', content: streamText, created_at: pendingFor.created_at } as ChatMessage;
     return [live, ...rows];
-  }, [visibleMessages, streamText]);
+  }, [visibleMessages, streamText, pendingFor]);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyDay, setHistoryDay] = useState<string | null>(null);
   const { byId: plansById } = useGoalPlans();
@@ -128,6 +131,65 @@ export default function AgentScreen() {
   // When the user spoke their message, speak the reply back (voice in → voice
   // out). A ref so the realtime handler (stable closure) reads the live value.
   const voiceReplyRef = useRef(false);
+
+  // ---- Spoken replies ----
+  // Each finished sentence is spoken as the reply streams in, so ALINE starts
+  // talking with its first sentence instead of after the whole answer. Stop
+  // (or the mic, or a new message) cuts it off.
+  const [speaking, setSpeaking] = useState(false);
+  const speechGenRef = useRef(0); // bumped on stop: late callbacks of old utterances are ignored
+  const speechQueueRef = useRef(0);
+  const spokenUpToRef = useRef(0);
+  const speak = useCallback((raw: string) => {
+    const text = forSpeech(raw);
+    if (!text) return;
+    const gen = speechGenRef.current;
+    speechQueueRef.current += 1;
+    setSpeaking(true);
+    const done = () => {
+      if (gen !== speechGenRef.current) return;
+      speechQueueRef.current = Math.max(0, speechQueueRef.current - 1);
+      if (speechQueueRef.current === 0) setSpeaking(false);
+    };
+    Speech.speak(text, { rate: 1.0, onDone: done, onStopped: done, onError: done });
+  }, []);
+  const silence = useCallback(() => {
+    speechGenRef.current += 1;
+    speechQueueRef.current = 0;
+    setSpeaking(false);
+    Speech.stop();
+  }, []);
+  const stopSpeaking = useCallback(() => {
+    voiceReplyRef.current = false; // the rest of this reply stays silent too
+    silence();
+  }, [silence]);
+  const speakStreamed = useCallback((textSoFar: string, final = false) => {
+    if (!voiceReplyRef.current) return;
+    if (textSoFar.length < spokenUpToRef.current) {
+      // The shown text was reset (a tool round followed): start over.
+      silence();
+      spokenUpToRef.current = 0;
+    }
+    const rest = textSoFar.slice(spokenUpToRef.current);
+    const end = final ? rest.length : lastSentenceEnd(rest);
+    if (end <= 0) return;
+    speak(rest.slice(0, end));
+    spokenUpToRef.current += end;
+  }, [speak, silence]);
+
+  // Streamed text arrives many times a second; redrawing on every piece made
+  // the list jump. Draw at most ~15 times a second (speech still gets every piece).
+  const pendingTextRef = useRef('');
+  const textTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const onStreamText = useCallback((t: string) => {
+    pendingTextRef.current = t;
+    speakStreamed(t);
+    if (textTimerRef.current) return;
+    textTimerRef.current = setTimeout(() => {
+      textTimerRef.current = null;
+      setStreamText(pendingTextRef.current);
+    }, 70);
+  }, [speakStreamed]);
   // Synchronous send lock: `thinking` is state, so it's still false for the
   // awaits between tapping send and the agent call — a second tap or a repeated
   // voice "final" result slipped through and sent the message twice.
@@ -166,8 +228,8 @@ export default function AgentScreen() {
     loadChat();
   }, [loadChat]);
 
-  // Merge incoming rows (realtime or catch-up), and speak an agent reply if
-  // the user's last message was spoken.
+  // Merge incoming rows (realtime or catch-up). Speaking replies happens as
+  // they stream (see Spoken replies).
   const addIncoming = useCallback((rows: ChatMessage[]) => {
     if (rows.length === 0) return;
     setMessages((prev) => {
@@ -176,14 +238,6 @@ export default function AgentScreen() {
       if (fresh.length === 0) return prev;
       return [...prev, ...fresh].sort((a, b) => (a.created_at ?? '').localeCompare(b.created_at ?? ''));
     });
-    // Voice in → voice out: speak the agent's reply only if the last
-    // message was spoken. Typed conversations stay silent.
-    const reply = rows.find((m) => m.role === 'agent');
-    if (reply && voiceReplyRef.current) {
-      voiceReplyRef.current = false;
-      Speech.stop();
-      Speech.speak(reply.content, { rate: 1.0 });
-    }
   }, []);
 
   // Realtime alone isn't enough: when its socket has dropped (app was in the
@@ -192,8 +246,8 @@ export default function AgentScreen() {
   // every return to the foreground.
   const messagesRef = useRef<ChatMessage[]>([]);
   messagesRef.current = messages;
-  const catchUp = useCallback(async () => {
-    if (!user) return;
+  const catchUp = useCallback(async (): Promise<ChatMessage[]> => {
+    if (!user) return [];
     const last = messagesRef.current[messagesRef.current.length - 1]?.created_at;
     const since = last ?? new Date(Date.now() - 7 * 86_400_000).toISOString();
     const { data } = await supabase
@@ -203,7 +257,9 @@ export default function AgentScreen() {
       .gte('created_at', since)
       .order('created_at', { ascending: true })
       .limit(50);
-    addIncoming((data ?? []) as ChatMessage[]);
+    const rows = (data ?? []) as ChatMessage[];
+    addIncoming(rows);
+    return rows;
   }, [user, addIncoming]);
 
   useEffect(() => {
@@ -312,7 +368,10 @@ export default function AgentScreen() {
 
   const sendTextUnlocked = async (raw: string, content: string, fromVoice: boolean, imageUri?: string) => {
     if (!user) return;
+    silence(); // a new message ends whatever ALINE was saying
     voiceReplyRef.current = fromVoice;
+    spokenUpToRef.current = 0;
+    pendingTextRef.current = '';
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
     setDraft('');
     setError(null);
@@ -356,8 +415,9 @@ export default function AgentScreen() {
     // 2) Ask the agent. Its text streams into a temporary bubble; the edge
     //    function saves the finished reply server-side.
     setThinking(true);
+    setPendingFor({ id: inserted.id, created_at: inserted.created_at ?? new Date().toISOString() });
     try {
-      const res = await streamAgentReply(inserted.id, setStreamText, setAgentStatus);
+      const res = await streamAgentReply(inserted.id, onStreamText, setAgentStatus, fromVoice);
       if (!res.ok) {
         console.warn('agent-respond failed:', res.error);
         setError('Your agent is offline right now. Try again in a moment.');
@@ -368,9 +428,20 @@ export default function AgentScreen() {
     } finally {
       // The reply is in the table by the time the call returns; don't rely on
       // realtime to have delivered it.
-      await catchUp().catch(() => {});
+      const rows = await catchUp().catch(() => [] as ChatMessage[]);
+      if (textTimerRef.current) {
+        clearTimeout(textTimerRef.current);
+        textTimerRef.current = null;
+      }
+      // Speak the last sentence (it may not end in a full stop); if nothing
+      // streamed at all, read the saved reply instead.
+      speakStreamed(pendingTextRef.current, true);
+      const reply = rows.find((m) => m.role === 'agent' && (m.created_at ?? '') > (inserted.created_at ?? ''));
+      if (voiceReplyRef.current && spokenUpToRef.current === 0 && reply) speak(reply.content);
+      voiceReplyRef.current = false;
       setStreamText('');
       setAgentStatus('');
+      setPendingFor(null);
       setThinking(false);
     }
   };
@@ -424,7 +495,7 @@ export default function AgentScreen() {
       setListening(false);
       return;
     }
-    Speech.stop(); // don't listen over our own voice
+    stopSpeaking(); // don't listen over our own voice
     const perm = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
     if (!perm.granted) {
       setError('Allow microphone & speech recognition in Settings to talk to ALINE.');
@@ -439,7 +510,7 @@ export default function AgentScreen() {
       interimResults: true,
       continuous: true, // pauses don't end it — the mic button does
     });
-  }, [listening, draft]);
+  }, [listening, draft, stopSpeaking]);
 
   // Notification deep-link: scroll to the focused message and pulse a
   // highlight. Waits for the message to be present (it may arrive via realtime
@@ -555,7 +626,7 @@ export default function AgentScreen() {
             ref={listRef}
             inverted
             data={listData}
-            keyExtractor={(m) => m.id}
+            keyExtractor={(m) => keyAliasRef.current.get(m.id) ?? m.id}
             contentContainerStyle={styles.messages}
             renderItem={({ item }) => (
               <Bubble
@@ -603,7 +674,12 @@ export default function AgentScreen() {
           </Pressable>
         ) : null}
 
-        {thinking && !streamText ? (
+        {speaking ? (
+          <Pressable style={styles.thinkingRow} onPress={stopSpeaking} hitSlop={8} accessibilityLabel="Stop speaking">
+            <Ionicons name="stop-circle" size={18} color={colors.accent} />
+            <Text style={styles.stopText}>Stop speaking</Text>
+          </Pressable>
+        ) : thinking && !streamText ? (
           <View style={styles.thinkingRow}>
             <ActivityIndicator size="small" color={colors.accent} />
             <Text style={styles.thinkingText}>{agentStatus || 'ALINE is thinking…'}</Text>
@@ -1003,6 +1079,7 @@ const styles = StyleSheet.create({
     paddingBottom: space.sm,
   },
   thinkingText: { color: colors.textMuted, fontSize: 13, fontStyle: 'italic' },
+  stopText: { color: colors.accent, fontSize: 13, fontWeight: '600' },
   errorRow: {
     marginHorizontal: space.lg,
     marginBottom: space.sm,
@@ -1099,3 +1176,22 @@ const styles = StyleSheet.create({
   },
   chipText: { color: colors.textMuted, fontSize: 13, fontStyle: 'italic' },
 });
+
+/** Index just past the last complete sentence in `text` (0 if none yet). */
+function lastSentenceEnd(text: string): number {
+  let end = 0;
+  const re = /[.!?…](?=\s)|\n/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text))) end = m.index + m[0].length;
+  return end;
+}
+
+/** Markdown and symbols read badly aloud. */
+function forSpeech(text: string): string {
+  return text
+    .replace(/[*_`#>]/g, '')
+    .replace(/^\s*[-•]\s+/gm, '')
+    .replace(/(\d)\s*[–-]\s*(\d)/g, '$1 to $2')
+    .replace(/\s+/g, ' ')
+    .trim();
+}

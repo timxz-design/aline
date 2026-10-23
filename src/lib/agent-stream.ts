@@ -21,6 +21,8 @@ export async function streamAgentReply(
   userMessageId: string,
   onText: (textSoFar: string) => void,
   onStatus: (status: string) => void = () => {},
+  /** Dictated message: the agent keeps its reply short enough to hear. */
+  voice = false,
 ): Promise<{ ok: boolean; error?: string }> {
   const { data: { session } } = await supabase.auth.getSession();
   if (!session) return { ok: false, error: 'not signed in' };
@@ -32,7 +34,7 @@ export async function streamAgentReply(
       Authorization: `Bearer ${session.access_token}`,
       apikey: process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? '',
     },
-    body: JSON.stringify({ user_message_id: userMessageId, stream: true }),
+    body: JSON.stringify({ user_message_id: userMessageId, stream: true, voice }),
   });
   if (!res.ok || !res.body) return { ok: false, error: `HTTP ${res.status}` };
 

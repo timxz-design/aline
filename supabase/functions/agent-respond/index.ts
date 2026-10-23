@@ -1911,7 +1911,7 @@ async function handleAgent(req: Request, emit: Emit | null): Promise<Response> {
   }
   const userId = userData.user.id;
 
-  let body: { user_message_id?: string };
+  let body: { user_message_id?: string; voice?: boolean };
   try {
     body = await req.json();
   } catch {
@@ -2402,6 +2402,10 @@ async function handleAgent(req: Request, emit: Emit | null): Promise<Response> {
     ? `Learned activity lengths (measured). When you create or move a block for one of these, use this length rather than a guess:\n${durationLines.join('\n')}`
     : '';
 
+  // Dictated message: the reply is read aloud, so keep it to what's worth hearing.
+  const voiceBlock = body.voice === true
+    ? `This message was spoken, and your reply will be read aloud. Answer in 1–3 short, natural spoken sentences: the outcome and anything they must decide. No lists, headings or symbols; skip details they can see on My Week unless they ask.`
+    : '';
   const systemArray = [
     {
       type: 'text' as const,
@@ -2410,7 +2414,7 @@ async function handleAgent(req: Request, emit: Emit | null): Promise<Response> {
     },
     {
       type: 'text' as const,
-      text: [dynamicBlock, visitsBlock, apptBlock, openQuestionsBlock, durationsBlock].filter(Boolean).join('\n\n'),
+      text: [dynamicBlock, visitsBlock, apptBlock, openQuestionsBlock, durationsBlock, voiceBlock].filter(Boolean).join('\n\n'),
     },
   ];
 
