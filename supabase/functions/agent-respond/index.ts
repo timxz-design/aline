@@ -774,6 +774,29 @@ const TOOLS = [
     },
   },
   {
+    name: 'forget_messages',
+    description:
+      "Leave messages out of your memory when the user says they were just testing, asks you to ignore or forget something, or says what they told you was wrong/made up ('I was testing', 'ignore that', 'forget what I said about Friday'). " +
+      "The messages stay visible in their chat, but you stop seeing them and anything learned from them is unlearned. Not for ordinary corrections ('actually it's at 6') — those are new information, just use them. " +
+      "Count exchanges back from this message: an exchange is one of their messages plus your reply. Confirm in one short line; don't apologise at length.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        exchanges: {
+          type: 'integer',
+          minimum: 0,
+          maximum: 10,
+          description: 'How many exchanges BEFORE this message to forget (0 = none).',
+        },
+        include_this: {
+          type: 'boolean',
+          description: "Also forget this message and your reply to it (true when this message is only about the test, e.g. 'I was just testing').",
+        },
+      },
+      required: ['exchanges'],
+    },
+  },
+  {
     name: 'correct_visit',
     description:
       "Correct what ALINE recorded for one of the user's stays (see 'Your day as visits'): what they were doing there and/or what the place is. Use when they tell you (\"that was the shop, not the gym\", \"I was at Ana's\", \"I was studying, not working\"). Their correction is final and never overwritten by later guesses.",
@@ -1989,6 +2012,7 @@ async function handleAgent(req: Request, emit: Emit | null): Promise<Response> {
       // no trace of either and decided it had made them up.
       .select('id, role, content, created_at, image_url, tools:context_snapshot->tools_executed')
       .eq('user_id', userId)
+      .eq('excluded_from_context', false)
       .order('created_at', { ascending: false })
       .limit(30),
     supabase
@@ -2487,6 +2511,9 @@ async function handleAgent(req: Request, emit: Emit | null): Promise<Response> {
   // thinking…" ("Updating your calendar…"); the reply streams into its bubble.
   // Reply text from a round that then called tools is cleared (reset).
   let showing = false;
+  // Set by forget_messages(include_this): this message and the reply stay out
+  // of future context, and nothing is learned from them.
+  let forgetThisTurn = false;
   const show = (text: string) => emit?.({ type: 'status', text });
   const streamText = () => {
     let started = false;
@@ -2585,17 +2612,19 @@ async function handleAgent(req: Request, emit: Emit | null): Promise<Response> {
     const toolResults: ContentBlock[] = [];
     const userTz = profile.timezone ?? 'Europe/Ljubljana';
     for (const tu of toolUseBlocks) {
-      const result = await executeTool(
-        supabase,
-        userId,
-        groups,
-        friends,
-        upcomingHangouts,
-        userTz,
-        tu.name,
-        tu.input,
-        triggerMsg?.image_url ?? null
-      );
+      const result = tu.name === 'forget_messages'
+        ? await forgetMessages(supabase, userId, triggerMsg, tu.input, () => { forgetThisTurn = true; })
+        : await executeTool(
+          supabase,
+          userId,
+          groups,
+          friends,
+          upcomingHangouts,
+          userTz,
+          tu.name,
+          tu.input,
+          triggerMsg?.image_url ?? null
+        );
       toolsExecuted.push({ name: tu.name, input: tu.input, result: result.message, ok: result.ok });
       toolResults.push({
         type: 'tool_result',
@@ -2687,6 +2716,7 @@ async function handleAgent(req: Request, emit: Emit | null): Promise<Response> {
       event_ids: linkEventIds.length > 0 ? linkEventIds : null,
       input_tokens: totalInputTokens || null,
       output_tokens: totalOutputTokens || null,
+      excluded_from_context: forgetThisTurn,
       context_snapshot: {
         goals_count: goals.length,
         interests_count: interests.length,
@@ -2731,7 +2761,7 @@ async function handleAgent(req: Request, emit: Emit | null): Promise<Response> {
   // (goal_plan_id is now set on the INSERT above, not via a follow-up UPDATE.)
 
   // -------- persist extracted preferences --------
-  if (extracted.length > 0) {
+  if (extracted.length > 0 && !forgetThisTurn) {
     const interestsToInsert = extracted.map((e) => ({
       user_id: userId,
       key: e.key,
@@ -2741,6 +2771,8 @@ async function handleAgent(req: Request, emit: Emit | null): Promise<Response> {
       // (interests_accumulate trigger); otherwise kept as a candidate.
       stated: isVerifiedStatement(e, triggerMsg?.content ?? ''),
       source: 'chat',
+      // Lets forget_messages unlearn it later.
+      source_message_id: body.user_message_id,
     }));
     const { error: intErr } = await supabase.from('interests').insert(interestsToInsert);
     if (intErr) console.warn('Failed to insert interests:', intErr);
@@ -2935,6 +2967,62 @@ function findOpenSlots(args: {
 }
 
 // ---------- tool execution ------------------------------------------------
+/** forget_messages: take the last N exchanges (and optionally this one) out
+ *  of the agent's context and unlearn what came from them. The chat itself
+ *  is untouched. */
+async function forgetMessages(
+  // deno-lint-ignore no-explicit-any
+  supabase: any,
+  userId: string,
+  current: ChatRow | null,
+  input: Record<string, unknown>,
+  forgetCurrent: () => void,
+): Promise<{ ok: boolean; message: string }> {
+  const exchanges = Math.max(0, Math.min(10, Number(input.exchanges ?? 0) || 0));
+  const includeThis = input.include_this === true;
+  const ids: string[] = [];
+  if (exchanges > 0 && current?.created_at) {
+    const { data, error } = await supabase
+      .from('chat_messages')
+      .select('id, role')
+      .eq('user_id', userId)
+      .eq('excluded_from_context', false)
+      .lt('created_at', current.created_at)
+      .order('created_at', { ascending: false })
+      .limit(40);
+    if (error) return { ok: false, message: `could not read the chat: ${error.message}` };
+    let users = 0;
+    for (const row of (data ?? []) as Array<{ id: string; role: string }>) {
+      if (row.role === 'user') {
+        if (users === exchanges) break;
+        users++;
+      }
+      ids.push(row.id);
+    }
+  }
+  if (includeThis && current) {
+    ids.push(current.id);
+    forgetCurrent();
+  }
+  if (ids.length === 0) return { ok: true, message: 'Nothing to forget.' };
+  const { error: exErr } = await supabase
+    .from('chat_messages')
+    .update({ excluded_from_context: true })
+    .in('id', ids)
+    .eq('user_id', userId);
+  if (exErr) return { ok: false, message: `could not forget: ${exErr.message}` };
+  const { data: unlearned } = await supabase
+    .from('interests')
+    .update({ active: false, stated: false })
+    .in('source_message_id', ids)
+    .eq('user_id', userId)
+    .select('id');
+  return {
+    ok: true,
+    message: `Forgot ${ids.length} message(s)${includeThis ? ' including this exchange' : ''}; unlearned ${unlearned?.length ?? 0} fact(s). They stay in the user's chat history.`,
+  };
+}
+
 async function executeTool(
   // deno-lint-ignore no-explicit-any
   supabase: any,
