@@ -1802,7 +1802,7 @@ function replyFilter(out: (text: string) => void, reset: () => void) {
       const end = stop >= 0 ? stop : Math.max(sent, buf.length - HOLD);
       if (end > sent) {
         let chunk = buf.slice(sent, end);
-        if (!emitted) chunk = chunk.replace(/^\s+/, '');
+        if (!emitted) chunk = chunk.replace(/^\s*(\[(\d{4}-\d{2}-\d{2}|they sent a photo[^\]]*|tools you used[^\]]*)\]\s*)*/, '');
         if (chunk) {
           out(chunk);
           emitted = true;
@@ -1831,7 +1831,10 @@ function parseClaudeText(text: string): { reply: string; extracted: Extracted[] 
   // Without <reply> tags the whole text is the reply — but the <extracted>
   // block (and any stray tags) must never reach the user.
   const reply = (replyMatch?.[1] ??
-    text.replace(/<extracted>[\s\S]*?(<\/extracted>|$)/g, '').replace(/<\/?reply>/g, '')).trim();
+    text.replace(/<extracted>[\s\S]*?(<\/extracted>|$)/g, '').replace(/<\/?reply>/g, ''))
+    .trim()
+    // The model sometimes copies the history notes ("[2026-10-24] ") onto its reply.
+    .replace(/^(\[(\d{4}-\d{2}-\d{2}|they sent a photo[^\]]*|tools you used[^\]]*)\]\s*)+/, '');
 
   let extracted: Extracted[] = [];
   if (extractedMatch?.[1]) {
