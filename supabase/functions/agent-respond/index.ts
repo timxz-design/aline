@@ -35,7 +35,9 @@ type ChatRow = {
   role: 'user' | 'agent' | 'system';
   content: string;
   created_at: string | null;
-  image_url?: string | null; // selected only on the triggering message
+  image_url?: string | null;
+  /** Tools the agent ran for this reply (from context_snapshot). */
+  tools?: Array<{ name?: string; ok?: boolean }> | null;
 };
 
 type ProfileRow = {
@@ -1644,6 +1646,14 @@ to what ${firstName} is saying (or they ask "what's my day"), act gently — don
   - **unrecognized place** → ask what they're up to ("you're not at your usual spot — what's going on?").
   Always phrase as a question/offer, never an accusation, and remember the signal can be wrong.
 
+# Earlier messages
+
+Past messages in this conversation start with notes in brackets added by the
+system: the date, "[they sent a photo …]" and "[tools you used for this reply: …]".
+They are true records: if an earlier reply of yours describes a photo or a
+lookup and the note is there, it really happened — don't take it back. Never
+write such bracket notes yourself.
+
 # Output format (STRICT)
 
 Your FINAL turn (after any tool calls) must be a single text block with
@@ -1970,7 +1980,11 @@ async function handleAgent(req: Request, emit: Emit | null): Promise<Response> {
       .eq('user_id', userId),
     supabase
       .from('chat_messages')
-      .select('id, role, content, created_at')
+      // Photos and the tools each reply used aren't re-sent with history, so
+      // they're carried as short notes (toClaudeMessages) — without them the
+      // agent saw its own past "I read your photo / checked Jake's week" with
+      // no trace of either and decided it had made them up.
+      .select('id, role, content, created_at, image_url, tools:context_snapshot->tools_executed')
       .eq('user_id', userId)
       .order('created_at', { ascending: false })
       .limit(30),
@@ -4638,7 +4652,13 @@ function toClaudeMessages(rows: ChatRow[]): ClaudeMessage[] {
     // Prefix each message with its date so the model can tell stale "today /
     // tomorrow" references (sent weeks ago) from current ones.
     const tag = row.created_at ? `[${row.created_at.slice(0, 10)}] ` : '';
-    const text = tag + row.content;
+    const notes: string[] = [];
+    if (row.role === 'user' && row.image_url) notes.push('[they sent a photo with this — you saw it then; it is not re-attached now]');
+    if (row.role !== 'user' && Array.isArray(row.tools) && row.tools.length > 0) {
+      const done = row.tools.map((t) => `${t.name ?? 'tool'} ${t.ok === false ? '✗' : '✓'}`).join(', ');
+      notes.push(`[tools you used for this reply: ${done}]`);
+    }
+    const text = tag + (notes.length ? notes.join(' ') + ' ' : '') + row.content;
     const last = out[out.length - 1];
     if (last && last.role === claudeRole && typeof last.content === 'string') {
       last.content += '\n\n' + text;
