@@ -3566,6 +3566,29 @@ async function executeTool(
       }
     }
 
+    // A goal block must belong to its goal: an unlinked one can't absorb the
+    // workout Apple Health records later, so the session showed up twice.
+    const unlinked = normalized.filter((o) => o.op === 'create' && o.event_type === 'goal' && !o.goal_id);
+    if (unlinked.length > 0) {
+      const { data: goalRows } = await supabase
+        .from('goals')
+        .select('id, title, goal_plans(status, plan_spec)')
+        .eq('user_id', userId)
+        .eq('status', 'active');
+      const goals = (goalRows ?? []) as Array<{ id: string; title: string; goal_plans: Array<{ status: string; plan_spec: unknown }> }>;
+      const words = (t: string) => t.toLowerCase().replace(/\([^)]*\)/g, '').split(/[^a-z0-9]+/).filter((w) => w.length > 2);
+      for (const op of unlinked) {
+        const title = String(op.title);
+        // The goal whose live plan names this session, else whose title shares a word.
+        const byPlan = goals.filter((g) => g.goal_plans?.some((p) =>
+          p.status === 'live' && JSON.stringify(p.plan_spec ?? '').toLowerCase().includes(title.toLowerCase().replace(/\s*\([^)]*\)\s*$/, ''))));
+        const byTitle = goals.filter((g) => words(g.title).some((w) => words(title).includes(w)));
+        const pick = byPlan.length === 1 ? byPlan[0] : byTitle.length === 1 ? byTitle[0] : goals.length === 1 ? goals[0] : null;
+        if (pick) op.goal_id = pick.id;
+        else op.event_type = 'flexible'; // can't tell which goal — don't create an orphan goal block
+      }
+    }
+
     // Blocks must never overlap, and a goal never gets two sessions on one day
     // (a missed session isn't doubled up onto a day that already has one).
     // Checked before anything is saved so the model can pick another time.
