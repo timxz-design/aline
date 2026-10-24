@@ -2482,11 +2482,49 @@ async function handleAgent(req: Request, emit: Emit | null): Promise<Response> {
     }, () => emit?.({ type: 'reset' }));
   };
   let firstTextMs = 0;
+  // A round's text is held back until it's clearly the answer (~150
+  // characters, or the round ending without tools). Text the model writes
+  // before turning to a tool ("Let me check your week…") is dropped — the
+  // status line covers that — so nothing is shown or spoken and then replaced.
+  const roundGate = () => {
+    const filter = streamText();
+    let held = '';
+    let open = false;
+    let toolRound = false;
+    return {
+      push(delta: string) {
+        if (toolRound) return;
+        if (open) return filter.push(delta);
+        held += delta;
+        if (held.replace(/<\/?reply>/g, '').trim().length >= 150) {
+          open = true;
+          filter.push(held);
+          held = '';
+        }
+      },
+      toolStarted() {
+        toolRound = true;
+      },
+      end(stopReason: string | null) {
+        if (stopReason === 'tool_use') return;
+        if (!open && held) filter.push(held);
+        filter.flush();
+      },
+    };
+  };
+  // deno-lint-ignore no-explicit-any
+  const watch = (stream: any, gate: ReturnType<typeof roundGate>) => {
+    if (!emit) return;
+    stream.on('text', (delta: string) => gate.push(delta));
+    stream.on('streamEvent', (ev: { type: string; content_block?: { type: string } }) => {
+      if (ev.type === 'content_block_start' && ev.content_block?.type === 'tool_use') gate.toolStarted();
+    });
+  };
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     // A round that ends in tool calls may have shown text the next round
     // replaces — tell the app to clear it.
-    const filter = streamText();
+    const gate = roundGate();
     let claudeData: Anthropic.Message;
     try {
       const stream = anthropic.messages.stream({
@@ -2500,9 +2538,9 @@ async function handleAgent(req: Request, emit: Emit | null): Promise<Response> {
         tools: TOOLS,
         messages,
       } as unknown as Anthropic.MessageStreamParams);
-      if (emit) stream.on('text', (delta) => filter.push(delta));
+      watch(stream, gate);
       claudeData = await stream.finalMessage();
-      if (claudeData.stop_reason !== 'tool_use') filter.flush();
+      gate.end(claudeData.stop_reason);
     } catch (err) {
       const status = err instanceof Anthropic.APIError ? err.status ?? 502 : 502;
       console.error('Anthropic error:', status, err instanceof Error ? err.message : err);
@@ -2559,7 +2597,7 @@ async function handleAgent(req: Request, emit: Emit | null): Promise<Response> {
   // text turn — the user would see "(no response)" even though tools ran. Force
   // one last text-only turn so the user always gets told what happened.
   if (!finalText.trim()) {
-    const filter = streamText();
+    const gate = roundGate();
     try {
       const stream = anthropic.messages.stream({
         model: MODEL,
@@ -2570,9 +2608,9 @@ async function handleAgent(req: Request, emit: Emit | null): Promise<Response> {
         tool_choice: { type: 'none' },
         messages,
       } as unknown as Anthropic.MessageStreamParams);
-      if (emit) stream.on('text', (delta) => filter.push(delta));
+      watch(stream, gate);
       const finalData = await stream.finalMessage();
-      filter.flush();
+      gate.end(finalData.stop_reason);
       addUsage(finalData.usage);
       finalText = finalData.content
         .filter((b): b is Anthropic.TextBlock => b.type === 'text')
